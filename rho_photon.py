@@ -1,9 +1,6 @@
 import numpy as np
-from hamiltonians import build_total_hamiltonian
-from states import bell_photons, thermal_spin_density_matrix
-from evolution import evolve_density_matrix, evolve_to_time
-from observables import photon_numbers, spin_at_site
-from protocol import full_pipeline
+from observables import partial_trace_spins, partial_trace_photons
+
 # ============================================================================
 # PARAMETERS
 # ============================================================================
@@ -20,8 +17,11 @@ tau_2 = 0.05
 final_evolution_time = 2.0
 temperature_list = np.arange(0.5,2.0,0.2)
 delta_t_list = np.arange(0.5,2.05,0.2)
+
 for Temp_spin in temperature_list:
     for delta_t in delta_t_list:
-        rho_out = full_pipeline(n_max,N_spins,omega1,omega2,g1,g2,J,delta,Temp_spin,tau_1,delta_t,tau_2,final_evolution_time)
         filename = f"rho_evolved_Nspins={N_spins}_nmax={n_max}_omega1={omega1:1.2f}_omega2={omega2:1.2f}_J{J:1.2f}_delta={delta:1.2f}_T={Temp_spin:1.2f}_tau1={tau_1:1.2f}_tau2={tau_2:1.2f}_delta_t={delta_t:1.2f}_final_t={final_evolution_time:1.2f}.npy"
-        np.save(filename,rho_out)
+        rho = np.load(filename,allow_pickle=True)
+        rho_photon = partial_trace_spins(rho,n_max,N_spins)
+        filename_out = f"rho_photons_Nspins={N_spins}_nmax={n_max}_omega1={omega1:1.2f}_omega2={omega2:1.2f}_J{J:1.2f}_delta={delta:1.2f}_T={Temp_spin:1.2f}_tau1={tau_1:1.2f}_tau2={tau_2:1.2f}_delta_t={delta_t:1.2f}_final_t={final_evolution_time:1.2f}.npy"
+        np.save(filename_out,rho_photon)

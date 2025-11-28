@@ -1,72 +1,81 @@
 import numpy as np
-from numpy.linalg import eigvalsh
 
+def von_neumann_entropy(rho):
+    """Calculate von Neumann entropy S(ρ) = -Tr[ρ log ρ]"""
+    eigenvals = np.linalg.eigvalsh(rho)
+    eigenvals = eigenvals[eigenvals > 1e-12]
+    S = -np.sum(eigenvals * np.log(eigenvals))
+    return S
 
-# ============================================================
-# VON NEUMANN ENTROPY
-# ============================================================
-def von_neumann_entropy(rho, tol=1e-12):
-    rho = (rho + rho.conj().T) / 2  # enforce Hermiticity
-    eigs = eigvalsh(rho)
-    eigs = np.clip(eigs, 0, None)
-    mask = eigs > 0
-    return -np.sum(eigs[mask] * np.log(eigs[mask]))
+def partial_trace_mode2(rho_photon, n_max):
+    """
+    Trace out photon mode 2 to get mode 1 reduced density matrix
+    rho_photon has structure: mode1 ⊗ mode2
+    Parameters:
+    -----------
+    rho_photon : ndarray (n_max² × n_max²)
+        Two-mode photon density matrix
+    n_max : int
+        Photon cutoff per mode
+    Returns:
+    --------
+    rho_mode1 : ndarray (n_max × n_max)
+        Reduced density matrix for mode 1
+    """
+    # Reshape: (n_max, n_max, n_max, n_max)
+    # Indices: [mode1_bra, mode2_bra, mode1_ket, mode2_ket]
+    rho_reshaped = rho_photon.reshape(n_max, n_max, n_max, n_max)
+    # Trace over mode 2 (axes 1 and 3)
+    rho_mode1 = np.trace(rho_reshaped, axis1=1, axis2=3)
+    return rho_mode1
 
+def partial_trace_mode1(rho_photon, n_max):
+    """
+    Trace out photon mode 1 to get mode 2 reduced density matrix
+    Parameters:
+    -----------
+    rho_photon : ndarray (n_max² × n_max²)
+        Two-mode photon density matrix
+    n_max : int
+        Photon cutoff per mode
+    Returns:
+    --------
+    rho_mode2 : ndarray (n_max × n_max)
+        Reduced density matrix for mode 2
+    """
+    # Reshape: (n_max, n_max, n_max, n_max)
+    rho_reshaped = rho_photon.reshape(n_max, n_max, n_max, n_max)
+    # Trace over mode 1 (axes 0 and 2)
+    rho_mode2 = np.trace(rho_reshaped, axis1=0, axis2=2)
+    return rho_mode2
 
-# ============================================================
-# MUTUAL INFORMATION
-# ============================================================
-def mutual_information(rho_total, rho_A, rho_B):
-    S_A = von_neumann_entropy(rho_A)
-    S_B = von_neumann_entropy(rho_B)
-    S_AB = von_neumann_entropy(rho_total)
-    return S_A + S_B - S_AB
+def mutual_information(rho_photon, n_max):
+    """
+    Calculate mutual information between two photon modes
+    I(1:2) = S(ρ₁) + S(ρ₂) - S(ρ₁₂)
+    Measures total correlations (classical + quantum) between the two modes
+    Parameters:
+    -----------
+    rho_photon : ndarray (n_max² × n_max²)
+        Two-mode photon density matrix (after tracing out spins)
+    n_max : int
+        Photon cutoff per mode
+    Returns:
+    --------
+    I : float
+        Mutual information (I ≥ 0)
+        I = 0: modes are independent
+        I > 0: modes are correlated
+    """
+    # Entropy of both modes together
+    S_12 = von_neumann_entropy(rho_photon)
+    # Entropy of mode 1 alone
+    rho_mode1 = partial_trace_mode2(rho_photon, n_max)
+    S_1 = von_neumann_entropy(rho_mode1)
+    # Entropy of mode 2 alone
+    rho_mode2 = partial_trace_mode1(rho_photon, n_max)
+    S_2 = von_neumann_entropy(rho_mode2)
+    # Mutual information
+    I = S_1 + S_2 - S_12
+    return I
 
-
-# ============================================================
-# MAIN ENTANGLEMENT CALCULATOR
-# ============================================================
-def compute_entanglement(full_file, reduced_file):
-    # Load full state
-    full = np.load(full_file)
-    rho_t = full["rho_t"]
-    times = full["times"]
-
-    # Load reduced states
-    red = np.load(reduced_file)
-    rho_p = red["rho_photon"]
-    rho_s = red["rho_spin"]
-
-    nt = len(times)
-
-    S_photon = np.zeros(nt)
-    S_spin   = np.zeros(nt)
-    S_total  = np.zeros(nt)
-    I_mutual = np.zeros(nt)
-
-    for t in range(nt):
-        S_photon[t] = von_neumann_entropy(rho_p[t])
-        S_spin[t]   = von_neumann_entropy(rho_s[t])
-        S_total[t]  = von_neumann_entropy(rho_t[t])
-        I_mutual[t] = mutual_information(rho_t[t], rho_p[t], rho_s[t])
-
-    # Save results
-    out_file = full_file.replace("FULL_rho_t", "ENTANGLEMENT")
-
-    np.savez(
-        out_file,
-        times=times,
-        S_photon=S_photon,
-        S_spin=S_spin,
-        S_total=S_total,
-        I_mutual=I_mutual
-    )
-
-    print(f"[OK] Saved entanglement data → {out_file}")
-
-
-if __name__ == "__main__":
-    import sys
-    full_file    = sys.argv[1]
-    reduced_file = sys.argv[2]
-    compute_entanglement(full_file, reduced_file)
