@@ -4,7 +4,7 @@ from states import bell_photons, thermal_spin_density_matrix
 from evolution import evolve_density_matrix, evolve_to_time
 from observables import photon_numbers, spin_at_site
 
-def full_pipeline(n_max,N_spins,omega1,omega2,g1,g2,J,delta,Temp_spin,tau_1,delta_t,tau_2,final_evolution_time):
+def full_pipeline(n_max,N_spins,omega1,omega2,g1,g2,J,delta,interaction_type,Temp_spin,tau_1,delta_t,tau_2,final_evolution_time):
     #first run
     #initial state
     rho_photon = bell_photons(n_max, i=0, j=1)
@@ -13,7 +13,7 @@ def full_pipeline(n_max,N_spins,omega1,omega2,g1,g2,J,delta,Temp_spin,tau_1,delt
     #Hamiltonian for first run
     g_1 = g1
     g_2 = 0
-    H_1 = build_total_hamiltonian(n_max, N_spins, omega1, omega2, g_1, g_2, J, delta)
+    H_1 = build_total_hamiltonian(n_max, N_spins, omega1, omega2, g_1, g_2, J, delta, interaction_type='intraction_type')
     #evolve for first run
     rho_1 = evolve_to_time(H_1,rho_initial,tau_1)
     #Hamiltonian for the second run

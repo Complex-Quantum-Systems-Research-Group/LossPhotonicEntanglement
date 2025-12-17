@@ -1,9 +1,21 @@
 from compute_entanglement import von_neumann_entropy, mutual_information
 import numpy as np
 import os
-from parameters import SimulationParameters
 
-params = SimulationParameters()
+# ============================================================================
+# PARAMETERS
+# ============================================================================
+n_max = 2
+N_spins = 6
+omega1 = 1.0
+omega2 = 1.0
+g1 = 2.0
+g2 = 2.0
+J = -1.0
+delta = 0.5
+tau_1 = 0.05
+tau_2 = 0.05
+final_evolution_time = 2.0
 
 temperature_list = np.arange(0.05, 2.05, 0.05)
 delta_t_list = np.arange(0.5, 2.05, 0.05)

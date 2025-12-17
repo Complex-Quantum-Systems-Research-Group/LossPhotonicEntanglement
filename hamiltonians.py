@@ -130,7 +130,7 @@ def build_spin_hamiltonian_xxz(n_max, N_spins, J, delta):
     print(f"  J = {J}, Δ = {delta}")
     return H_spin
 
-def build_spin_boson_coupling(n_max, N_spins, g1, g2):
+def build_tavis_cummings_spin_boson_coupling(n_max, N_spins, g1, g2):
     """
     Build Tavis-Cummings coupling:
     H_coupling = g₁(a₁†Σσ₋ + a₁Σσ₊) + g₂(a₂†Σσ₋ + a₂Σσ₊)
@@ -177,9 +177,52 @@ def build_spin_boson_coupling(n_max, N_spins, g1, g2):
     print(f"  Coupling Hamiltonian shape: {H_coupling.shape}")
     return H_coupling
 
+def build_ising_dickie_spin_boson_coupling(n_max, N_spins, g):
+    """
+    Build Ising-Dickie coupling:
+    H_coupling = g(a₁†Σσᶻ + a₁Σσᶻ) + g(a₂†Σσᶻ + a₂Σσᶻ)
+    
+    Returns:
+    --------
+    H_coupling : ndarray
+        Spin-boson interaction Hamiltonian
+    """
+    print("Building Ising-Dickie spin-boson coupling...")
+    
+    a1, a1_dag, _, _ = create_bosonic_operators(n_max)
+    a2, a2_dag, _, _ = create_bosonic_operators(n_max)
+    sigma_x, sigma_y, sigma_z, _, _, _ = create_pauli_matrices()
+    
+    dim_spin = 2**N_spins
 
+    # Build collective spin operators Σσˣ
+    sigma_x_total = sum(
+        operator_at_spin_site(sigma_x, i, N_spins, n_max) 
+        for i in range(N_spins)
+    )
+    
+    # Extend mode 1 operators to full space
+    a1_extended = np.kron(a1, np.eye(n_max * dim_spin, dtype=complex))
+    a1dag_extended = np.kron(a1_dag, np.eye(n_max * dim_spin, dtype=complex))
+    
+    # Extend mode 2 operators to full space
+    a2_extended = np.kron(np.eye(n_max, dtype=complex),
+                         np.kron(a2, np.eye(dim_spin, dtype=complex)))
+    a2dag_extended = np.kron(np.eye(n_max, dtype=complex),
+                            np.kron(a2_dag, np.eye(dim_spin, dtype=complex)))
+    
+    # Build coupling Hamiltonian
+    H_coupling = (
+        g * (a1dag_extended @ sigma_x_total + a1_extended @ sigma_x_total) +
+        g * (a2dag_extended @ sigma_x_total + a2_extended @ sigma_x_total)
+    )
+    
+    print(f"  Coupling Hamiltonian shape: {H_coupling.shape}")
+    return H_coupling
+
+#
 def build_total_hamiltonian(n_max, N_spins, omega1, omega2, g1, g2, 
-                           J, delta):
+                           J, delta, interaction_type='tavis_cummings'):
     """
     Build total Hamiltonian by combining all parts
     
@@ -206,8 +249,11 @@ def build_total_hamiltonian(n_max, N_spins, omega1, omega2, g1, g2,
     H_spin = build_spin_hamiltonian_xxz(n_max, N_spins, J, delta)
     
     # Spin-boson coupling
-    H_coupling = build_spin_boson_coupling(n_max, N_spins, g1, g2)
-    
+    if interaction_type == 'tavis_cummings':
+        H_coupling = build_tavis_cummings_spin_boson_coupling(n_max, N_spins, g1, g2)
+    elif interaction_type == 'ising_dickie':
+        H_coupling = build_ising_dickie_spin_boson_coupling(n_max, N_spins, g1, g2)
+
     # Total
     H_total = H_boson + H_spin + H_coupling
     
