@@ -42,6 +42,14 @@ def build_spin_hamiltonian_xxz(n_max, N_spins, J, delta):
     
     NEAREST-NEIGHBOR interactions only (1D chain)
     
+    NOTE: as written, delta multiplies the ZZ term *inside* the J
+    prefactor, i.e. effective ZZ coefficient = J*delta, not a free
+    -standing delta as manuscript Eq. (6) implies. Left unchanged
+    pending a decision on which convention is intended (see review
+    item D7 / #4). If you want independent J and delta, change to:
+        H_spin += J*(sigma_x_i@sigma_x_j + sigma_y_i@sigma_y_j) \
+                  + delta*(sigma_z_i@sigma_z_j)
+    
     Parameters:
     -----------
     J : float
@@ -134,11 +142,20 @@ def build_tavis_cummings_spin_boson_coupling(n_max, N_spins, g1, g2):
     print(f"  Coupling Hamiltonian shape: {H_coupling.shape}")
     return H_coupling
 
-def build_ising_dickie_spin_boson_coupling(n_max, N_spins, g):
+def build_ising_dickie_spin_boson_coupling(n_max, N_spins, g1, g2):
     """
     Build Ising-Dickie coupling:
-    H_coupling = g(a₁†Σσᶻ + a₁Σσᶻ) + g(a₂†Σσᶻ + a₂Σσᶻ)
-    
+    H_coupling = g₁(a₁†Σσᶻ + a₁Σσᶻ) + g₂(a₂†Σσᶻ + a₂Σσᶻ)
+
+    FIX (was bug): now uses sigma_z_total, matching this docstring and
+    manuscript Eq. (7). Previously built sigma_x_total, which does not
+    commute with Σσᶻᵢ and silently invalidated the exact-RU /
+    Δt-independence result claimed for this model (review §C3).
+
+    FIX (was bug): g2 is now a required argument and applied to mode 2,
+    instead of reusing g1 for both modes (previously build_total_hamiltonian
+    called this function with g1 only, discarding g2).
+
     Returns:
     --------
     H_coupling : ndarray
@@ -152,9 +169,10 @@ def build_ising_dickie_spin_boson_coupling(n_max, N_spins, g):
     
     dim_spin = 2**N_spins
 
-    # Build collective spin operators Σσˣ
-    sigma_x_total = sum(
-        operator_at_spin_site(sigma_x, i, N_spins, n_max) 
+    # Build collective spin operator Σσᶻ (conserves total Sz, required
+    # for the block-diagonal / exact-RU structure derived in review §C3)
+    sigma_z_total = sum(
+        operator_at_spin_site(sigma_z, i, N_spins, n_max) 
         for i in range(N_spins)
     )
     
@@ -170,8 +188,8 @@ def build_ising_dickie_spin_boson_coupling(n_max, N_spins, g):
     
     # Build coupling Hamiltonian
     H_coupling = (
-        g * (a1dag_extended @ sigma_x_total + a1_extended @ sigma_x_total) +
-        g * (a2dag_extended @ sigma_x_total + a2_extended @ sigma_x_total)
+        g1 * (a1dag_extended @ sigma_z_total + a1_extended @ sigma_z_total) +
+        g2 * (a2dag_extended @ sigma_z_total + a2_extended @ sigma_z_total)
     )
     
     print(f"  Coupling Hamiltonian shape: {H_coupling.shape}")
@@ -210,7 +228,8 @@ def build_total_hamiltonian(n_max, N_spins, omega1, omega2, g1, g2,
     if interaction_type == 'tavis_cummings':
         H_coupling = build_tavis_cummings_spin_boson_coupling(n_max, N_spins, g1, g2)
     elif interaction_type == 'ising_dickie':
-        H_coupling = build_ising_dickie_spin_boson_coupling(n_max, N_spins, g1)
+        # FIX (was bug): pass both g1 and g2 (was g1 only)
+        H_coupling = build_ising_dickie_spin_boson_coupling(n_max, N_spins, g1, g2)
 
     
     # Total
@@ -274,6 +293,3 @@ def build_spin_only_hamiltonian(N_spins, J, delta):
         )
         
     return H_spin_only
-
-
-
