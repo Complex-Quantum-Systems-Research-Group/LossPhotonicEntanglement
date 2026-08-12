@@ -16,19 +16,16 @@ new_protocol.py : Hamiltonian-agnostic 4-step pipeline (couple mode 1 to spins f
 
 config.py : single source of truth for sweep parameters (n_max, N_spins, omega1/2, g1/2, J, delta, interaction_type, tau_1/2, final_evolution_time, temperature_list, delta_t_list) and the shared filename_tag() used by all run_*.py scripts.
 
-coherence.py : off-diagonal measure, relative entropy of coherence S(diag rho) - S(rho), Kraus channel application with CPTP check
-
-entanglement.py : von Neumann entropy, partial traces per mode, mutual information I = S1 + S2 - S12
+measures.py : merged coherence.py + entanglement.py. Von Neumann entropy, partial traces per photon mode, mutual information I = S1 + S2 - S12, off-diagonal coherence measure, relative entropy of coherence S(diag rho) - S(rho), Kraus channel application with CPTP check.
 
 compute_reduced_states.py : CLI script: loads full rho(t) array, computes photon and spin reduced states at each time step, saves as .npz
 
-run.py : main sweep: iterates over (T, delta_t) from config.py, runs full pipeline, saves evolved rho to ising_dickie/ or tavis_cummings/
-
-run_rho_photon.py : loads evolved rho from ising_dickie/, traces out spins, saves photon rho to data_photon/
-
-run_observable.py : loads photon rho from data_photon/, computes von Neumann entropy and mutual information, saves results and summary arrays to data_observable/
-
-run_coherence.py : runs full pipeline (g=20) over (T, delta_t), computes coherence measures, saves rho and measures to data_coherence/
+pipeline.py : merged run.py + run_rho_photon.py + run_observable.py + run_coherence.py into one script with four stages, each runnable via `python pipeline.py <stage>`:
+  - evolve     : sweep over (T, delta_t) from config.py, run full pipeline, save evolved rho to ising_dickie/ or tavis_cummings/
+  - photon     : load evolved rho, trace out spins, save photon rho to data_photon/
+  - observable : load photon rho, compute von Neumann entropy and mutual information, save results + summary arrays to data_observable/
+  - coherence  : run full pipeline over (T, delta_t), compute coherence measures, save rho and measures to data_coherence/
+  NOTE: confirm the coherence stage's coupling strength (g1/g2 in config.py vs. the g=20 previously noted here) before running.
 
 id_plot_coherence.ipynb : plots coherence measures for Ising-Dickie model
 id_plot_ob.ipynb : plots observables for Ising-Dickie model
@@ -39,16 +36,16 @@ Hilbert space ordering: mode1 x mode2 x spin1 x ... x spinN, dimension n_max^2 x
 
 WHAT TO RUN AND IN WHAT ORDER
 
-Step 1: run.py
-Run this first. Sweeps over all (T, delta_t) combinations, calls full_pipeline for each, and saves evolved full density matrices to ising_dickie/ or tavis_cummings/ depending on the interaction_type set at the top of the file.
+Step 1: python pipeline.py evolve
+Sweeps over all (T, delta_t) combinations from config.py, calls full_pipeline_unitary for each, and saves evolved full density matrices to ising_dickie/ or tavis_cummings/ depending on interaction_type in config.py.
 
-Step 2: run_rho_photon.py
-Run after step 1. Loads each evolved rho from ising_dickie/, traces out the spin degrees of freedom, and saves the photon reduced density matrix to data_photon/.
+Step 2: python pipeline.py photon
+Run after step 1. Loads each evolved rho, traces out the spin degrees of freedom, and saves the photon reduced density matrix to data_photon/.
 
-Step 3: run_observable.py
+Step 3: python pipeline.py observable
 Run after step 2. Loads each photon rho from data_photon/, computes von Neumann entropy and mutual information, saves individual files and summary arrays to data_observable/.
 
-Step 3 (alternative): run_coherence.py
+Step 3 (alternative): python pipeline.py coherence
 
 Step 4: corresponding .ipynb file
 plots the data 
