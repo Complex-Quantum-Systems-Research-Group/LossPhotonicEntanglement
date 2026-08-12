@@ -1,0 +1,54 @@
+INDEX
+
+This project simulates a hybrid quantum system (two photon modes + interacting spin chain) evolved through a 4-step unitary protocol, then analyzed for entanglement and coherence across a temperature / delay-time parameter sweep.
+
+hamiltonians.py : builds bosonic, XXZ spin, and spin-boson coupling Hamiltonians (Tavis-Cummings or Ising-Dicke). Also builds spin-only Hamiltonian for thermal states.
+
+observables.py : expectation values, partial traces (photon and spin), photon number operators, energy and energy variance
+
+states.py : Bell photon states (|i,i> + |j,j>)/sqrt(2), product Fock states, thermal spin density matrices via exp(-bH)/Z
+
+evolution.py : unitary evolution rho(t) = U(t) rho_0 U†(t) via matrix exponentiation, single time point or array of times
+
+new_evolution.py : refactored version of evolution.py that exposes unitary_from_hamiltonian(H, t) as a standalone function
+
+protocol.py : full_pipeline: 4-step sequence coupling mode 1 to spins (tau_1), free evolve (delta_t), coupling mode 2 to spins (tau_2), free evolve
+
+new_protocol.py : Hamiltonian-agnostic version of the same pipeline using apply_unitaries(rho, [U1,...,Un])
+
+coherence.py : off-diagonal measure, relative entropy of coherence S(diag rho) - S(rho), Kraus channel application with CPTP check
+
+entanglement.py : von Neumann entropy, partial traces per mode, mutual information I = S1 + S2 - S12
+
+compute_reduced_states.py : CLI script: loads full rho(t) array, computes photon and spin reduced states at each time step, saves as .npz
+
+run.py : main sweep: iterates over (T, delta_t), runs full pipeline, saves evolved rho to ising_dickie/ or tavis_cummings/
+
+run_rho_photon.py : loads evolved rho from ising_dickie/, traces out spins, saves photon rho to data_photon/
+
+run_observable.py : loads photon rho from data_photon/, computes von Neumann entropy and mutual information, saves results and summary arrays to data_observable/
+
+run_coherence.py : runs full pipeline (g=20) over (T, delta_t), computes coherence measures, saves rho and measures to data_coherence/
+
+id_plot_coherence.ipynb : plots coherence measures for Ising-Dickie model
+id_plot_ob.ipynb : plots observables for Ising-Dickie model
+tc_plot_coherence.ipynb : plots coherence measures for Tavis-Cummings model
+tc_plot_ob.ipynb : plots observables for Tavis-Cummings model
+
+Hilbert space ordering: mode1 x mode2 x spin1 x ... x spinN, dimension n_max^2 x 2^N
+
+WHAT TO RUN AND IN WHAT ORDER
+
+Step 1: run.py
+Run this first. Sweeps over all (T, delta_t) combinations, calls full_pipeline for each, and saves evolved full density matrices to ising_dickie/ or tavis_cummings/ depending on the interaction_type set at the top of the file.
+
+Step 2: run_rho_photon.py
+Run after step 1. Loads each evolved rho from ising_dickie/, traces out the spin degrees of freedom, and saves the photon reduced density matrix to data_photon/.
+
+Step 3: run_observable.py
+Run after step 2. Loads each photon rho from data_photon/, computes von Neumann entropy and mutual information, saves individual files and summary arrays to data_observable/.
+
+Step 3 (alternative): run_coherence.py
+
+Step 4: corresponding .ipynb file
+plots the data 

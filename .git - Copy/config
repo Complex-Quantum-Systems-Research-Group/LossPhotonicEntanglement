@@ -1,0 +1,12 @@
+[core]
+	repositoryformatversion = 0
+	filemode = false
+	bare = false
+	logallrefupdates = true
+	symlinks = false
+	ignorecase = true
+[branch "master"]
+	vscode-merge-base = origin/master
+[remote "origin"]
+	url = https://github.com/Complex-Quantum-Systems-Research-Group/LossPhotonicEntanglement.git
+	fetch = +refs/heads/*:refs/remotes/origin/*

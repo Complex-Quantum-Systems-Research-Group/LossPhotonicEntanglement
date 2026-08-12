@@ -1,14 +1,8 @@
 import numpy as np
 import os
-
-from hamiltonians import build_total_hamiltonian
-from states import bell_photons, thermal_spin_density_matrix
-from evolution import evolve_density_matrix, evolve_to_time
-from observables import photon_numbers, spin_at_site
-from protocol import full_pipeline
-
-# Import coherence quantifiers
-from coherence import off_diagonal_measure, relative_entropy_coherence, apply_kraus_channel
+from new_protocol import full_pipeline_unitary
+from coherence import off_diagonal_measure, relative_entropy_coherence
+from observables import partial_trace_spins
 
 # ============================================================================
 # PARAMETERS
@@ -16,11 +10,12 @@ from coherence import off_diagonal_measure, relative_entropy_coherence, apply_kr
 n_max = 2
 N_spins = 6
 omega1 = 1.0
-omega2 = 1.0
-g1 = 20.0
-g2 = 20.0
+omega2 = 1.5
+g1 = 2.0
+g2 = 2.0
 J = -1.0
 delta = 0.5
+interaction_type = "ising_dickie"
 tau_1 = 0.05
 tau_2 = 0.05
 final_evolution_time = 2.0
@@ -35,16 +30,22 @@ os.makedirs("data_coherence", exist_ok=True)
 # ============================================================================
 for Temp_spin in temperature_list:
     for delta_t in delta_t_list:
-        # Run your full pipeline to get evolved density matrix
-        rho_out = full_pipeline(
-            n_max, N_spins, omega1, omega2, g1, g2, J, delta,
-            Temp_spin, tau_1, delta_t, tau_2, final_evolution_time
+
+        rho_out = full_pipeline_unitary(
+            n_max, N_spins,
+            omega1, omega2,
+            g1, g2, J, delta,
+            interaction_type,
+            Temp_spin,
+            tau_1, delta_t, tau_2, final_evolution_time
         )
 
-        # Compute coherence measures
-        offdiag_val = off_diagonal_measure(rho_out)
-        relentropy_val = relative_entropy_coherence(rho_out)
+        # Partial trace to get photon state
+        rho_photon = partial_trace_spins(rho_out, n_max, N_spins)
 
+        # Compute coherence measures on photon subsystem
+        offdiag_val = off_diagonal_measure(rho_photon)
+        relentropy_val = relative_entropy_coherence(rho_photon)
 
         # Save density matrix
         filename_rho = (
@@ -59,4 +60,7 @@ for Temp_spin in temperature_list:
         # Save coherence values
         filename_measures = filename_rho.replace("rho_evolved", "coherence_measures")
         filepath_measures = os.path.join("data_coherence", filename_measures)
-        np.save(filepath_measures, {"offdiag": offdiag_val, "relentropy": relentropy_val})
+        np.save(filepath_measures, {
+            "offdiag": offdiag_val,
+            "relentropy": relentropy_val
+        })

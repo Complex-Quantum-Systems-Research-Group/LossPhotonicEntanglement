@@ -39,6 +39,7 @@ data/
 data_photon/
 data_observable/
 plot.ipynb
+data_coherence/
 
 # -----------------------------------------------------------------------------
 # Logs and temp files

@@ -222,7 +222,7 @@ def build_ising_dickie_spin_boson_coupling(n_max, N_spins, g):
 
 #
 def build_total_hamiltonian(n_max, N_spins, omega1, omega2, g1, g2, 
-                           J, delta, interaction_type='tavis_cummings'):
+                           J, delta, interaction_type):
     """
     Build total Hamiltonian by combining all parts
     
@@ -249,11 +249,13 @@ def build_total_hamiltonian(n_max, N_spins, omega1, omega2, g1, g2,
     H_spin = build_spin_hamiltonian_xxz(n_max, N_spins, J, delta)
     
     # Spin-boson coupling
+
     if interaction_type == 'tavis_cummings':
         H_coupling = build_tavis_cummings_spin_boson_coupling(n_max, N_spins, g1, g2)
     elif interaction_type == 'ising_dickie':
-        H_coupling = build_ising_dickie_spin_boson_coupling(n_max, N_spins, g1, g2)
+        H_coupling = build_ising_dickie_spin_boson_coupling(n_max, N_spins, g1)
 
+    
     # Total
     H_total = H_boson + H_spin + H_coupling
     
