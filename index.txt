@@ -2,19 +2,19 @@ INDEX
 
 This project simulates a hybrid quantum system (two photon modes + interacting spin chain) evolved through a 4-step unitary protocol, then analyzed for entanglement and coherence across a temperature / delay-time parameter sweep.
 
+operators.py : shared low-level building blocks (Pauli matrices, bosonic ladder operators, operator_at_spin_site) used by both hamiltonians.py and observables.py.
+
 hamiltonians.py : builds bosonic, XXZ spin, and spin-boson coupling Hamiltonians (Tavis-Cummings or Ising-Dicke). Also builds spin-only Hamiltonian for thermal states.
 
 observables.py : expectation values, partial traces (photon and spin), photon number operators, energy and energy variance
 
 states.py : Bell photon states (|i,i> + |j,j>)/sqrt(2), product Fock states, thermal spin density matrices via exp(-bH)/Z
 
-evolution.py : unitary evolution rho(t) = U(t) rho_0 U†(t) via matrix exponentiation, single time point or array of times
+new_evolution.py : unitary evolution rho(t) = U(t) rho_0 U dagger(t) via matrix exponentiation; exposes unitary_from_hamiltonian(H, t) as a standalone function. (evolution.py, an earlier duplicate without this refactor, was removed as dead code.)
 
-new_evolution.py : refactored version of evolution.py that exposes unitary_from_hamiltonian(H, t) as a standalone function
+new_protocol.py : Hamiltonian-agnostic 4-step pipeline (couple mode 1 to spins for tau_1, free evolve for delta_t, couple mode 2 to spins for tau_2, free evolve) using apply_unitaries(rho, [U1,...,Un]). (protocol.py, the earlier Hamiltonian-specific duplicate, was removed as dead code.)
 
-protocol.py : full_pipeline: 4-step sequence coupling mode 1 to spins (tau_1), free evolve (delta_t), coupling mode 2 to spins (tau_2), free evolve
-
-new_protocol.py : Hamiltonian-agnostic version of the same pipeline using apply_unitaries(rho, [U1,...,Un])
+config.py : single source of truth for sweep parameters (n_max, N_spins, omega1/2, g1/2, J, delta, interaction_type, tau_1/2, final_evolution_time, temperature_list, delta_t_list) and the shared filename_tag() used by all run_*.py scripts.
 
 coherence.py : off-diagonal measure, relative entropy of coherence S(diag rho) - S(rho), Kraus channel application with CPTP check
 
@@ -22,7 +22,7 @@ entanglement.py : von Neumann entropy, partial traces per mode, mutual informati
 
 compute_reduced_states.py : CLI script: loads full rho(t) array, computes photon and spin reduced states at each time step, saves as .npz
 
-run.py : main sweep: iterates over (T, delta_t), runs full pipeline, saves evolved rho to ising_dickie/ or tavis_cummings/
+run.py : main sweep: iterates over (T, delta_t) from config.py, runs full pipeline, saves evolved rho to ising_dickie/ or tavis_cummings/
 
 run_rho_photon.py : loads evolved rho from ising_dickie/, traces out spins, saves photon rho to data_photon/
 

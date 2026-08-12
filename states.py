@@ -24,7 +24,6 @@ def product_photons(n_max, n1_init=0, n2_init=0):
     
     return rho_photon
 
-product_photons(4, n1_init=1, n2_init=1)
 
 def bell_photons(n_max, i=0, j=1):
     """

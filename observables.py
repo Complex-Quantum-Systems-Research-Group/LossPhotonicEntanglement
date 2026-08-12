@@ -1,49 +1,10 @@
 import numpy as np
-from scipy.linalg import expm
+from operators import create_pauli_matrices, create_bosonic_operators, operator_at_spin_site
 
 # ============================================================================
-# BASIC BUILDING BLOCKS
+# BASIC BUILDING BLOCKS (create_pauli_matrices, create_bosonic_operators,
+# operator_at_spin_site now live in operators.py, shared with hamiltonians.py)
 # ============================================================================
-
-def create_pauli_matrices():
-    """Return Pauli matrices and identity"""
-    sigma_x = np.array([[0, 1], [1, 0]], dtype=complex)
-    sigma_y = np.array([[0, -1j], [1j, 0]], dtype=complex)
-    sigma_z = np.array([[1, 0], [0, -1]], dtype=complex)
-    sigma_plus = np.array([[0, 1], [0, 0]], dtype=complex)
-    sigma_minus = np.array([[0, 0], [1, 0]], dtype=complex)
-    id_spin = np.eye(2, dtype=complex)
-    
-    return sigma_x, sigma_y, sigma_z, sigma_plus, sigma_minus, id_spin
-
-
-def create_bosonic_operators(n_max):
-    """Create annihilation, creation, and number operators for bosonic mode"""
-    a = np.diag(np.sqrt(np.arange(1, n_max)), 1)
-    a_dag = a.T
-    n = a_dag @ a
-    id_boson = np.eye(n_max, dtype=complex)
-    
-    return a, a_dag, n, id_boson
-
-
-def operator_at_spin_site(op, site, N_spins, n_max):
-    """
-    Apply operator to specific spin site in full Hilbert space
-    Full space: mode1 ⊗ mode2 ⊗ spin1 ⊗ spin2 ⊗ ... ⊗ spinN
-    """
-    # Start with identity on both photon modes
-    result = np.eye(n_max * n_max, dtype=complex)
-    
-    # Tensor product over all spins
-    id_spin = np.eye(2, dtype=complex)
-    for i in range(N_spins):
-        if i == site:
-            result = np.kron(result, op)
-        else:
-            result = np.kron(result, id_spin)
-    
-    return result
 
 
 def expectation_value(rho, operator):

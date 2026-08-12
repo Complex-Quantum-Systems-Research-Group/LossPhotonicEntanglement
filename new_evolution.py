@@ -2,8 +2,6 @@
 
 import numpy as np
 from scipy.linalg import expm
-from hamiltonians import build_total_hamiltonian
-from states import product_photons, bell_photons, thermal_spin_density_matrix
 
 
 def unitary_from_hamiltonian(H, t):
