@@ -1,88 +1,74 @@
+"""Initial states for EP-MOKS simulations."""
+from __future__ import annotations
+
 import numpy as np
-from scipy.linalg import expm
-from hamiltonians import build_spin_only_hamiltonian
+from scipy.linalg import eigh
 
-def product_photons(n_max, n1_init=0, n2_init=0):
-    """
-    Create density matrix for product photon state |n1⟩⊗|n2⟩
-    
-    Returns:
-    --------
-    rho_photon : ndarray (n_max² × n_max²)
-    """
-    # Create pure state vector
-    psi_mode1 = np.zeros(n_max, dtype=complex)
-    psi_mode1[n1_init] = 1.0
-    
-    psi_mode2 = np.zeros(n_max, dtype=complex)
-    psi_mode2[n2_init] = 1.0
-    
-    psi_photon = np.kron(psi_mode1, psi_mode2)
-    
-    # ρ = |ψ⟩⟨ψ|
-    rho_photon = np.outer(psi_photon, psi_photon.conj())
-    
-    return rho_photon
+from hamiltonians import build_spin_hamiltonian_xxz
 
 
-def bell_photons(n_max, i=0, j=1):
-    """
-    Create density matrix for Bell-like state (|i,i⟩ + |j,j⟩)/√2
-    
-    Parameters:
-    -----------
-    n_max : int
-        Photon cutoff per mode
-    i, j : int
-        Fock state numbers (must satisfy 0 ≤ i,j < n_max)
-        
-    Returns:
-    --------
-    rho_photon : ndarray (n_max² × n_max²)
-    
-    Examples:
-    ---------
-    bell_photons(n_max, 0, 1)  # (|0,0⟩ + |1,1⟩)/√2
-    bell_photons(n_max, 0, 2)  # (|0,0⟩ + |2,2⟩)/√2
-    bell_photons(n_max, 1, 3)  # (|1,1⟩ + |3,3⟩)/√2
-    """
-    if i >= n_max or j >= n_max or i < 0 or j < 0:
-        raise ValueError(f"i={i} and j={j} must satisfy 0 ≤ i,j < n_max={n_max}")
-    
-    if i == j:
-        raise ValueError(f"i and j must be different (got i=j={i})")
-    
-    # Create entangled state vector
-    psi_photon = np.zeros(n_max * n_max, dtype=complex)
-    
-    # |i,i⟩ component: index = i * n_max + i
-    psi_photon[i * n_max + i] = 1.0 / np.sqrt(2)
-    
-    # |j,j⟩ component: index = j * n_max + j
-    psi_photon[j * n_max + j] = 1.0 / np.sqrt(2)
-    
-    # ρ = |ψ⟩⟨ψ|
-    rho_photon = np.outer(psi_photon, psi_photon.conj())
-    
-    return rho_photon
+def bell_polarization_state(label: str = "phi_plus") -> np.ndarray:
+    """Return a two-polarization-qubit Bell-state density matrix.
 
-def thermal_spin_density_matrix(N_spins, J, delta, T=1.0):
+    Computational basis mapping: |0> = |H>, |1> = |V>.
     """
-    Compute thermal density matrix: ρ = exp(-β H_spin) / Z
-    
-    Returns:
-    --------
-    rho_spin : ndarray (2^N × 2^N)
-    """
-    # Get spin-only Hamiltonian
-    H_spin_only = build_spin_only_hamiltonian(N_spins, J, delta)
-    
-    # Compute thermal state
-    beta = 1.0 / T
-    exp_neg_beta_H = expm(-beta * H_spin_only)
-    Z = np.trace(exp_neg_beta_H)
-    rho_spin = exp_neg_beta_H / Z
-    
-    return rho_spin
+    bell = {
+        "phi_plus": np.array([1, 0, 0, 1], dtype=complex) / np.sqrt(2),
+        "phi_minus": np.array([1, 0, 0, -1], dtype=complex) / np.sqrt(2),
+        "psi_plus": np.array([0, 1, 1, 0], dtype=complex) / np.sqrt(2),
+        "psi_minus": np.array([0, 1, -1, 0], dtype=complex) / np.sqrt(2),
+    }
+    if label not in bell:
+        raise ValueError(f"unknown Bell state {label!r}")
+    psi = bell[label]
+    return np.outer(psi, psi.conj())
 
 
+def product_polarization_state(first: int = 0, second: int = 0) -> np.ndarray:
+    """Return |first, second><first, second| for first,second in {0,1}."""
+    if first not in (0, 1) or second not in (0, 1):
+        raise ValueError("first and second must be 0 or 1")
+    psi = np.zeros(4, dtype=complex)
+    psi[2 * first + second] = 1.0
+    return np.outer(psi, psi.conj())
+
+
+def thermal_state_from_hamiltonian(H: np.ndarray, temperature: float, atol: float = 1e-12) -> np.ndarray:
+    """Stable Gibbs state exp(-H/T)/Z in units k_B=1.
+
+    At T=0 the canonical limit is taken as the equal mixture on the degenerate
+    ground-state subspace.
+    """
+    H = np.asarray(H, dtype=complex)
+    if H.ndim != 2 or H.shape[0] != H.shape[1]:
+        raise ValueError("H must be square")
+    if temperature < 0:
+        raise ValueError("temperature must be >= 0")
+
+    evals, evecs = eigh(0.5 * (H + H.conj().T))
+    if temperature == 0:
+        mask = np.isclose(evals, evals[0], atol=atol, rtol=0.0)
+        V = evecs[:, mask]
+        rho = V @ V.conj().T / np.sum(mask)
+    else:
+        shifted = evals - evals.min()
+        weights = np.exp(-shifted / temperature)
+        weights /= weights.sum()
+        rho = (evecs * weights) @ evecs.conj().T
+
+    rho = 0.5 * (rho + rho.conj().T)
+    rho /= np.trace(rho).real
+    return rho
+
+
+def thermal_spin_density_matrix(
+    n_spins: int,
+    J: float,
+    delta: float,
+    temperature: float = 1.0,
+    h_z: float = 0.0,
+    periodic: bool = False,
+) -> np.ndarray:
+    """Thermal density matrix of the XXZ spin chain."""
+    H = build_spin_hamiltonian_xxz(n_spins, J, delta, h_z=h_z, periodic=periodic)
+    return thermal_state_from_hamiltonian(H, temperature)

@@ -1,295 +1,157 @@
+"""Hamiltonians and interaction generators for the corrected EP-MOKS model.
+
+The primary model treats each probe photon as a polarization qubit and the MOKE
+interaction as a short, magnetization-conditioned polarization rotation.  This
+is a controlled toy model for Kerr rotation, not a microscopic electronic MOKE
+Hamiltonian.
+"""
+from __future__ import annotations
+
 import numpy as np
-from scipy.linalg import expm
-from operators import (
-    create_pauli_matrices,
-    create_bosonic_operators,
-    operator_at_spin_site,
-    operator_at_spin_site_spin_only,
-)
 
-def build_bosonic_hamiltonian(n_max, N_spins, omega1, omega2):
+from operators import I2, SX, SY, SZ, SP, SM, kron_all, spin_only_operator
+
+
+def build_spin_hamiltonian_xxz(
+    n_spins: int,
+    J: float,
+    delta: float,
+    h_z: float = 0.0,
+    periodic: bool = False,
+) -> np.ndarray:
+    r"""Return the spin-only XXZ Hamiltonian.
+
+    We use the conventional spin-1/2 operators S = sigma/2:
+
+        H = J sum_i (Sx_i Sx_{i+1} + Sy_i Sy_{i+1}
+                     + Delta Sz_i Sz_{i+1}) - h_z sum_i Sz_i.
+
+    Therefore the Pauli-matrix representation carries an overall factor 1/4 on
+    the exchange terms and 1/2 on the Zeeman term.  Units use hbar = k_B = 1.
     """
-    Build H_boson = ω₁ a₁† a₁ + ω₂ a₂† a₂
-    
-    Returns:
-    --------
-    H_boson : ndarray
-        Bosonic part of Hamiltonian
+    if n_spins < 2:
+        raise ValueError("n_spins must be >= 2 for an XXZ chain")
+
+    dim = 2**n_spins
+    H = np.zeros((dim, dim), dtype=complex)
+
+    bonds = [(i, i + 1) for i in range(n_spins - 1)]
+    if periodic and n_spins > 2:
+        bonds.append((n_spins - 1, 0))
+
+    for i, j in bonds:
+        sx_i = spin_only_operator(SX, i, n_spins)
+        sx_j = spin_only_operator(SX, j, n_spins)
+        sy_i = spin_only_operator(SY, i, n_spins)
+        sy_j = spin_only_operator(SY, j, n_spins)
+        sz_i = spin_only_operator(SZ, i, n_spins)
+        sz_j = spin_only_operator(SZ, j, n_spins)
+        H += (J / 4.0) * (sx_i @ sx_j + sy_i @ sy_j + delta * (sz_i @ sz_j))
+
+    if h_z != 0.0:
+        for i in range(n_spins):
+            H -= (h_z / 2.0) * spin_only_operator(SZ, i, n_spins)
+
+    return 0.5 * (H + H.conj().T)
+
+
+def probe_weights_gaussian(n_spins: int, center: float | None = None, sigma: float = 1.0) -> np.ndarray:
+    """Normalized nonuniform probe weights for a localized optical spot."""
+    if sigma <= 0:
+        raise ValueError("sigma must be > 0")
+    if center is None:
+        center = 0.5 * (n_spins - 1)
+    x = np.arange(n_spins, dtype=float)
+    w = np.exp(-0.5 * ((x - center) / sigma) ** 2)
+    return w / np.sum(w)
+
+
+def weighted_magnetization_z(n_spins: int, weights=None) -> np.ndarray:
+    r"""Return a dimensionless weighted z magnetization in the spin subspace.
+
+    M_z = sum_i w_i sigma_z^(i), with sum_i |w_i| = 1 by normalization.
+    Its operator norm is <= 1 for nonnegative normalized weights.
+
+    Equal weights produce the conserved collective magnetization of the XXZ
+    chain.  Nonuniform weights model a finite/local optical spot and generally
+    do not commute with the exchange Hamiltonian, allowing delay-time dynamics.
     """
-    print("Building bosonic Hamiltonian...")
-    
-    a1, a1_dag, n1, id1 = create_bosonic_operators(n_max)
-    a2, a2_dag, n2, id2 = create_bosonic_operators(n_max)
-    
-    dim_spin = 2**N_spins
-    
-    # H_photon1 = ω₁ n₁ ⊗ I₂ ⊗ I_spins
-    H_photon1 = np.kron(n1, np.eye(n_max * dim_spin, dtype=complex))
-    
-    # H_photon2 = ω₂ I₁ ⊗ n₂ ⊗ I_spins
-    H_photon2 = np.kron(np.eye(n_max, dtype=complex), 
-                        np.kron(n2, np.eye(dim_spin, dtype=complex)))
-    
-    H_boson = omega1 * H_photon1 + omega2 * H_photon2
-    
-    print(f"  Bosonic Hamiltonian shape: {H_boson.shape}")
-    return H_boson
+    if weights is None:
+        w = np.ones(n_spins, dtype=float) / n_spins
+    else:
+        w = np.asarray(weights, dtype=float)
+        if w.shape != (n_spins,):
+            raise ValueError(f"weights must have shape ({n_spins},)")
+        norm = np.sum(np.abs(w))
+        if norm <= 0:
+            raise ValueError("weights must not all vanish")
+        w = w / norm
+
+    M = np.zeros((2**n_spins, 2**n_spins), dtype=complex)
+    for i, wi in enumerate(w):
+        M += wi * spin_only_operator(SZ, i, n_spins)
+    return 0.5 * (M + M.conj().T)
 
 
-def build_spin_hamiltonian_xxz(n_max, N_spins, J, delta):
+def collective_magnetization_z(n_spins: int) -> np.ndarray:
+    """Convenience wrapper for equally weighted collective z magnetization."""
+    return weighted_magnetization_z(n_spins, np.ones(n_spins, dtype=float))
+
+
+def exchange_generator_spin_only(n_spins: int, weights=None) -> tuple[np.ndarray, np.ndarray]:
+    """Weighted collective spin raising/lowering operators for a benchmark model."""
+    if weights is None:
+        w = np.ones(n_spins, dtype=float) / n_spins
+    else:
+        w = np.asarray(weights, dtype=float)
+        if w.shape != (n_spins,):
+            raise ValueError(f"weights must have shape ({n_spins},)")
+        norm = np.sum(np.abs(w))
+        if norm <= 0:
+            raise ValueError("weights must not all vanish")
+        w = w / norm
+
+    sp = np.zeros((2**n_spins, 2**n_spins), dtype=complex)
+    sm = np.zeros_like(sp)
+    for i, wi in enumerate(w):
+        sp += wi * spin_only_operator(SP, i, n_spins)
+        sm += wi * spin_only_operator(SM, i, n_spins)
+    return sp, sm
+
+
+def kerr_interaction_generator(n_spins: int, photon: int, magnetization: np.ndarray) -> np.ndarray:
+    r"""Generator G_k = sigma_y^(photon k) tensor M_z for Kerr rotations.
+
+    U_k(theta) = exp(-i theta G_k).
+
+    In the H/V Jones basis, exp(-i theta sigma_y) is a real polarization
+    rotation.  The material operator M_z makes the rotation conditional on the
+    sampled magnetization.
     """
-    Build H_spin = J Σᵢ (σᵢˣσᵢ₊₁ˣ + σᵢʸσᵢ₊₁ʸ + Δ σᵢᶻσᵢ₊₁ᶻ)
-    
-    NEAREST-NEIGHBOR interactions only (1D chain)
-    
-    NOTE: as written, delta multiplies the ZZ term *inside* the J
-    prefactor, i.e. effective ZZ coefficient = J*delta, not a free
-    -standing delta as manuscript Eq. (6) implies. Left unchanged
-    pending a decision on which convention is intended (see review
-    item D7 / #4). If you want independent J and delta, change to:
-        H_spin += J*(sigma_x_i@sigma_x_j + sigma_y_i@sigma_y_j) \
-                  + delta*(sigma_z_i@sigma_z_j)
-    
-    Parameters:
-    -----------
-    J : float
-        Coupling strength
-    delta : float
-        Anisotropy parameter (Δ=1 is Heisenberg, Δ→∞ is Ising)
-        
-    Returns:
-    --------
-    H_spin : ndarray
-        Spin-spin interaction Hamiltonian
+    if photon not in (0, 1):
+        raise ValueError("photon must be 0 or 1")
+    magnetization = np.asarray(magnetization, dtype=complex)
+    if magnetization.shape != (2**n_spins, 2**n_spins):
+        raise ValueError("magnetization has incompatible shape")
+    p_factors = [SY if photon == 0 else I2, SY if photon == 1 else I2]
+    return kron_all(p_factors + [magnetization])
+
+
+def exchange_interaction_generator(n_spins: int, photon: int, weights=None) -> np.ndarray:
+    r"""Generic excitation-exchange benchmark for a photon polarization qubit.
+
+    G = sigma_+^(p) tensor S_- + sigma_-^(p) tensor S_+.
+
+    This is retained only as a generic coherent exchange benchmark.  It is not
+    identified with the magneto-optical Kerr interaction.
     """
-    print("Building XXZ spin Hamiltonian (nearest-neighbor)...")
-    
-    sigma_x, sigma_y, sigma_z, _, _, _ = create_pauli_matrices()
-    
-    dim = n_max * n_max * (2**N_spins)
-    H_spin = np.zeros((dim, dim), dtype=complex)
-    
-    # Sum over nearest-neighbor pairs: (0,1), (1,2), ..., (N-2, N-1)
-    for i in range(N_spins - 1):
-        j = i + 1  # Next neighbor
-        
-        # Get operators at sites i and j
-        sigma_x_i = operator_at_spin_site(sigma_x, i, N_spins, n_max)
-        sigma_x_j = operator_at_spin_site(sigma_x, j, N_spins, n_max)
-        
-        sigma_y_i = operator_at_spin_site(sigma_y, i, N_spins, n_max)
-        sigma_y_j = operator_at_spin_site(sigma_y, j, N_spins, n_max)
-        
-        sigma_z_i = operator_at_spin_site(sigma_z, i, N_spins, n_max)
-        sigma_z_j = operator_at_spin_site(sigma_z, j, N_spins, n_max)
-        
-        # Add XXZ interaction for this bond
-        H_spin += J * (
-            sigma_x_i @ sigma_x_j +           # XX term
-            sigma_y_i @ sigma_y_j +           # YY term
-            delta * (sigma_z_i @ sigma_z_j)   # ΔZZ term
-        )
-    
-    print(f"  Spin Hamiltonian shape: {H_spin.shape}")
-    print(f"  Number of bonds: {N_spins - 1}")
-    print(f"  J = {J}, Δ = {delta}")
-    return H_spin
-
-def build_tavis_cummings_spin_boson_coupling(n_max, N_spins, g1, g2):
-    """
-    Build Tavis-Cummings coupling:
-    H_coupling = g₁(a₁†Σσ₋ + a₁Σσ₊) + g₂(a₂†Σσ₋ + a₂Σσ₊)
-    
-    Returns:
-    --------
-    H_coupling : ndarray
-        Spin-boson interaction Hamiltonian
-    """
-    print("Building spin-boson coupling...")
-    
-    a1, a1_dag, _, _ = create_bosonic_operators(n_max)
-    a2, a2_dag, _, _ = create_bosonic_operators(n_max)
-    _, _, _, sigma_plus, sigma_minus, _ = create_pauli_matrices()
-    
-    dim_spin = 2**N_spins
-    
-    # Build collective spin operators Σσ₊ and Σσ₋
-    sigma_plus_total = sum(
-        operator_at_spin_site(sigma_plus, i, N_spins, n_max) 
-        for i in range(N_spins)
-    )
-    sigma_minus_total = sum(
-        operator_at_spin_site(sigma_minus, i, N_spins, n_max) 
-        for i in range(N_spins)
-    )
-    
-    # Extend mode 1 operators to full space
-    a1_extended = np.kron(a1, np.eye(n_max * dim_spin, dtype=complex))
-    a1dag_extended = np.kron(a1_dag, np.eye(n_max * dim_spin, dtype=complex))
-    
-    # Extend mode 2 operators to full space
-    a2_extended = np.kron(np.eye(n_max, dtype=complex),
-                         np.kron(a2, np.eye(dim_spin, dtype=complex)))
-    a2dag_extended = np.kron(np.eye(n_max, dtype=complex),
-                            np.kron(a2_dag, np.eye(dim_spin, dtype=complex)))
-    
-    # Build coupling Hamiltonian
-    H_coupling = (
-        g1 * (a1dag_extended @ sigma_minus_total + a1_extended @ sigma_plus_total) +
-        g2 * (a2dag_extended @ sigma_minus_total + a2_extended @ sigma_plus_total)
-    )
-    
-    print(f"  Coupling Hamiltonian shape: {H_coupling.shape}")
-    return H_coupling
-
-def build_ising_dickie_spin_boson_coupling(n_max, N_spins, g1, g2):
-    """
-    Build Ising-Dickie coupling:
-    H_coupling = g₁(a₁†Σσᶻ + a₁Σσᶻ) + g₂(a₂†Σσᶻ + a₂Σσᶻ)
-
-    FIX (was bug): now uses sigma_z_total, matching this docstring and
-    manuscript Eq. (7). Previously built sigma_x_total, which does not
-    commute with Σσᶻᵢ and silently invalidated the exact-RU /
-    Δt-independence result claimed for this model (review §C3).
-
-    FIX (was bug): g2 is now a required argument and applied to mode 2,
-    instead of reusing g1 for both modes (previously build_total_hamiltonian
-    called this function with g1 only, discarding g2).
-
-    Returns:
-    --------
-    H_coupling : ndarray
-        Spin-boson interaction Hamiltonian
-    """
-    print("Building Ising-Dickie spin-boson coupling...")
-    
-    a1, a1_dag, _, _ = create_bosonic_operators(n_max)
-    a2, a2_dag, _, _ = create_bosonic_operators(n_max)
-    sigma_x, sigma_y, sigma_z, _, _, _ = create_pauli_matrices()
-    
-    dim_spin = 2**N_spins
-
-    # Build collective spin operator Σσᶻ (conserves total Sz, required
-    # for the block-diagonal / exact-RU structure derived in review §C3)
-    sigma_z_total = sum(
-        operator_at_spin_site(sigma_z, i, N_spins, n_max) 
-        for i in range(N_spins)
-    )
-    
-    # Extend mode 1 operators to full space
-    a1_extended = np.kron(a1, np.eye(n_max * dim_spin, dtype=complex))
-    a1dag_extended = np.kron(a1_dag, np.eye(n_max * dim_spin, dtype=complex))
-    
-    # Extend mode 2 operators to full space
-    a2_extended = np.kron(np.eye(n_max, dtype=complex),
-                         np.kron(a2, np.eye(dim_spin, dtype=complex)))
-    a2dag_extended = np.kron(np.eye(n_max, dtype=complex),
-                            np.kron(a2_dag, np.eye(dim_spin, dtype=complex)))
-    
-    # Build coupling Hamiltonian
-    H_coupling = (
-        g1 * (a1dag_extended @ sigma_z_total + a1_extended @ sigma_z_total) +
-        g2 * (a2dag_extended @ sigma_z_total + a2_extended @ sigma_z_total)
-    )
-    
-    print(f"  Coupling Hamiltonian shape: {H_coupling.shape}")
-    return H_coupling
-
-#
-def build_total_hamiltonian(n_max, N_spins, omega1, omega2, g1, g2, 
-                           J, delta, interaction_type):
-    """
-    Build total Hamiltonian by combining all parts
-    
-    Parameters:
-    -----------
-    model : str
-        'xxz' for XXZ model, 'ising' for pure Ising
-        
-    Returns:
-    --------
-    H_total : ndarray
-        Complete Hamiltonian
-    """
-    print(f"\n{'='*60}")
-    print(f"{'='*60}")
-    print(f"System: {N_spins} spins, {n_max} photons/mode")
-    print(f"Hilbert space dimension: {n_max * n_max * (2**N_spins)}")
-    print()
-    
-    # Bosonic part
-    H_boson = build_bosonic_hamiltonian(n_max, N_spins, omega1, omega2)
-    
-    # Spin part
-    H_spin = build_spin_hamiltonian_xxz(n_max, N_spins, J, delta)
-    
-    # Spin-boson coupling
-
-    if interaction_type == 'tavis_cummings':
-        H_coupling = build_tavis_cummings_spin_boson_coupling(n_max, N_spins, g1, g2)
-    elif interaction_type == 'ising_dickie':
-        # FIX (was bug): pass both g1 and g2 (was g1 only)
-        H_coupling = build_ising_dickie_spin_boson_coupling(n_max, N_spins, g1, g2)
-
-    
-    # Total
-    H_total = H_boson + H_spin + H_coupling
-    
-    print()
-    print(f"Total Hamiltonian built!")
-    print(f"  Shape: {H_total.shape}")
-    print(f"  Hermitian: {np.allclose(H_total, H_total.conj().T)}")
-    print(f"{'='*60}\n")
-    
-    return H_total
-
-def build_spin_only_hamiltonian(N_spins, J, delta):
-    """
-    Build ONLY the spin Hamiltonian (without photon spaces)
-    This operates on spin subspace: dimension 2^N × 2^N
-    
-    Used for computing thermal states
-    
-    Parameters:
-    -----------
-    N_spins : int
-        Number of spins
-    J : float
-        Coupling strength
-    delta : float
-        Anisotropy (for XXZ), ignored for Ising
-    model : str
-        'xxz' or 'ising'
-        
-    Returns:
-    --------
-    H_spin_only : ndarray (2^N × 2^N)
-        Spin Hamiltonian in spin subspace only
-    """
-    
-    sigma_x, sigma_y, sigma_z, _, _, _ = create_pauli_matrices()
-    
-    dim_spin = 2**N_spins
-    H_spin_only = np.zeros((dim_spin, dim_spin), dtype=complex)
-    
-    for i in range(N_spins - 1):
-        j = i + 1  # Next neighbor
-        
-        # Get operators at sites i and j
-        sigma_x_i = operator_at_spin_site_spin_only(sigma_x, i, N_spins)
-        sigma_x_j = operator_at_spin_site_spin_only(sigma_x, j, N_spins)
-        
-        sigma_y_i = operator_at_spin_site_spin_only(sigma_y, i, N_spins)
-        sigma_y_j = operator_at_spin_site_spin_only(sigma_y, j, N_spins)
-        
-        sigma_z_i = operator_at_spin_site_spin_only(sigma_z, i, N_spins)
-        sigma_z_j = operator_at_spin_site_spin_only(sigma_z, j, N_spins)
-        
-        # Add XXZ interaction for this bond
-        H_spin_only += J * (
-            sigma_x_i @ sigma_x_j +           # XX term
-            sigma_y_i @ sigma_y_j +           # YY term
-            delta * (sigma_z_i @ sigma_z_j)   # ΔZZ term
-        )
-        
-    return H_spin_only
+    if photon not in (0, 1):
+        raise ValueError("photon must be 0 or 1")
+    sp_s, sm_s = exchange_generator_spin_only(n_spins, weights)
+    pplus = SP
+    pminus = SM
+    p0_plus = pplus if photon == 0 else I2
+    p1_plus = pplus if photon == 1 else I2
+    p0_minus = pminus if photon == 0 else I2
+    p1_minus = pminus if photon == 1 else I2
+    return kron_all([p0_plus, p1_plus, sm_s]) + kron_all([p0_minus, p1_minus, sp_s])

@@ -1,112 +1,133 @@
-"""
-Single entry point for the four sweep stages that were previously separate
-scripts (run.py, run_rho_photon.py, run_observable.py, run_coherence.py).
-All stages share the same (T, delta_t) loop and config.py parameters.
+"""Validated EP-MOKS parameter sweep.
 
-Usage:
-    python pipeline.py evolve       # step 1: sweep + save full rho
-    python pipeline.py photon       # step 2: trace out spins -> data_photon/
-    python pipeline.py observable   # step 3: von Neumann entropy + mutual info
-    python pipeline.py coherence    # step 3 (alt): coherence measures, own sweep
+Run a small validation first:
+    python pipeline.py validate
+
+Then, only after the validation and convergence checks pass:
+    python pipeline.py sweep
 """
+from __future__ import annotations
+
+import json
 import os
 import sys
+
 import numpy as np
 
 import config as cfg
+from measures import (
+    bell_fidelity,
+    concurrence,
+    l1_coherence,
+    mutual_information,
+    purity,
+    relative_entropy_coherence,
+    von_neumann_entropy,
+)
 from new_protocol import full_pipeline_unitary
 from observables import partial_trace_spins
-from measures import (
-    von_neumann_entropy,
-    mutual_information,
-    off_diagonal_measure,
-    relative_entropy_coherence,
-)
+from states import bell_polarization_state
+from validation import assert_density_matrix, density_matrix_diagnostics
 
 
-def stage_evolve():
-    """Step 1: sweep over (T, delta_t), run full pipeline, save evolved rho."""
-    os.makedirs(cfg.interaction_type, exist_ok=True)
-    for Temp_spin in cfg.temperature_list:
-        for delta_t in cfg.delta_t_list:
-            rho_out = full_pipeline_unitary(
-                cfg.n_max, cfg.N_spins,
-                cfg.omega1, cfg.omega2,
-                cfg.g1, cfg.g2, cfg.J, cfg.delta,
-                cfg.interaction_type,
-                Temp_spin,
-                cfg.tau_1, delta_t, cfg.tau_2, cfg.final_evolution_time,
-            )
-            tag = f"{cfg.filename_tag()}_T={Temp_spin:1.2f}_delta_t={delta_t:1.2f}"
-            np.save(os.path.join(cfg.interaction_type, f"rho_evolved_{tag}.npy"), rho_out)
+def run_point(T: float, delta_t: float) -> dict:
+    rho_full = full_pipeline_unitary(
+        n_spins=cfg.N_spins,
+        J=cfg.J,
+        delta=cfg.delta,
+        temperature=T,
+        delta_t=delta_t,
+        theta1=cfg.theta1,
+        theta2=cfg.theta2,
+        probe_model=cfg.probe_model,
+        probe_sigma_sites=cfg.probe_sigma_sites,
+        h_z=cfg.h_z,
+        periodic=cfg.periodic,
+        interaction_type=cfg.interaction_type,
+        bell_state=cfg.bell_state,
+    )
+    assert_density_matrix(rho_full)
+    rho_p = partial_trace_spins(rho_full, cfg.N_spins)
+    assert_density_matrix(rho_p)
+    target = bell_polarization_state(cfg.bell_state)
+    return {
+        "T": float(T),
+        "delta_t": float(delta_t),
+        "entropy_bits": von_neumann_entropy(rho_p),
+        "purity": purity(rho_p),
+        "mutual_information_bits": mutual_information(rho_p),
+        "concurrence": concurrence(rho_p),
+        "l1_coherence": l1_coherence(rho_p),
+        "relative_entropy_coherence_bits": relative_entropy_coherence(rho_p),
+        "bell_fidelity": bell_fidelity(rho_p, target),
+        "rho_photons": rho_p,
+    }
 
 
-def stage_photon():
-    """Step 2: load evolved rho, trace out spins, save photon reduced state."""
-    os.makedirs("data_photon", exist_ok=True)
-    for Temp_spin in cfg.temperature_list:
-        for delta_t in cfg.delta_t_list:
-            tag = f"{cfg.filename_tag()}_T={Temp_spin:1.2f}_delta_t={delta_t:1.2f}"
-            filepath_in = os.path.join(cfg.interaction_type, f"rho_evolved_{tag}.npy")
-            rho = np.load(filepath_in, allow_pickle=True)
-            rho_photon = partial_trace_spins(rho, cfg.n_max, cfg.N_spins)
-            np.save(os.path.join("data_photon", f"rho_photons_{tag}.npy"), rho_photon)
+def stage_validate() -> None:
+    """Cheap pre-run checks; this is intentionally not the full sweep."""
+    test_points = [
+        (0.2, 0.0),
+        (0.2, 1.0),
+        (1.0, 0.0),
+        (1.0, 1.0),
+    ]
+    print("Running four-point smoke validation...")
+    for T, dt in test_points:
+        result = run_point(T, dt)
+        print(
+            f"T={T:.3g}, dt={dt:.3g}, concurrence={result['concurrence']:.8f}, "
+            f"purity={result['purity']:.8f}, MI={result['mutual_information_bits']:.8f}"
+        )
+
+    # Exact control: for collective Mz, [H_XXZ,Mz]=0, so the reduced photon
+    # state must be independent of the free spin delay (up to roundoff).
+    kwargs = dict(
+        n_spins=cfg.N_spins,
+        J=cfg.J,
+        delta=cfg.delta,
+        temperature=0.7,
+        theta1=cfg.theta1,
+        theta2=cfg.theta2,
+        probe_model="collective",
+        probe_sigma_sites=cfg.probe_sigma_sites,
+        h_z=cfg.h_z,
+        periodic=cfg.periodic,
+        interaction_type="kerr",
+        bell_state=cfg.bell_state,
+    )
+    r0 = partial_trace_spins(full_pipeline_unitary(delta_t=0.0, **kwargs), cfg.N_spins)
+    r1 = partial_trace_spins(full_pipeline_unitary(delta_t=1.234, **kwargs), cfg.N_spins)
+    err = np.linalg.norm(r0 - r1)
+    print(f"collective-Mz exact delay-independence error = {err:.3e}")
+    if err > 1e-9:
+        raise AssertionError("collective-Mz delay-independence control failed")
+    print("Validation passed.")
 
 
-def stage_observable():
-    """Step 3: load photon rho, compute entropy + mutual information, save summary."""
-    os.makedirs("data_observable", exist_ok=True)
-    von_neumann_list, mutual_information_list = [], []
-    for Temp_spin in cfg.temperature_list:
-        for delta_t in cfg.delta_t_list:
-            tag = f"{cfg.filename_tag()}_T={Temp_spin:1.2f}_delta_t={delta_t:1.2f}"
-            rho_photons = np.load(os.path.join("data_photon", f"rho_photons_{tag}.npy"), allow_pickle=True)
+def stage_sweep() -> None:
+    os.makedirs(cfg.output_root, exist_ok=True)
+    rows = []
+    for T in cfg.temperature_list:
+        for dt in cfg.delta_t_list:
+            result = run_point(float(T), float(dt))
+            rho_p = result.pop("rho_photons")
+            rows.append(result)
+            stem = f"{cfg.filename_tag()}_T={T:.4f}_dt={dt:.4f}"
+            np.save(os.path.join(cfg.output_root, f"rho_photons_{stem}.npy"), rho_p)
 
-            von_neumann_val = von_neumann_entropy(rho_photons)
-            mutual_info_val = mutual_information(rho_photons, cfg.n_max)
-
-            np.save(os.path.join("data_observable", f"von_neumann_entropy_{tag}.npy"), von_neumann_val)
-            np.save(os.path.join("data_observable", f"mutual_information_{tag}.npy"), mutual_info_val)
-
-            von_neumann_list.append((Temp_spin, delta_t, von_neumann_val))
-            mutual_information_list.append((Temp_spin, delta_t, mutual_info_val))
-
-    np.save("data_observable/von_neumann_entropy_summary.npy", np.array(von_neumann_list, dtype=object))
-    np.save("data_observable/mutual_information_summary.npy", np.array(mutual_information_list, dtype=object))
+    np.savez_compressed(
+        os.path.join(cfg.output_root, f"summary_{cfg.filename_tag()}.npz"),
+        rows=np.array(rows, dtype=object),
+    )
+    with open(os.path.join(cfg.output_root, f"summary_{cfg.filename_tag()}.json"), "w", encoding="utf-8") as f:
+        json.dump(rows, f, indent=2)
 
 
-def stage_coherence():
-    """Step 3 (alt): run full pipeline, compute coherence measures on photon subsystem."""
-    os.makedirs("data_coherence", exist_ok=True)
-    for Temp_spin in cfg.temperature_list:
-        for delta_t in cfg.delta_t_list:
-            rho_out = full_pipeline_unitary(
-                cfg.n_max, cfg.N_spins,
-                cfg.omega1, cfg.omega2,
-                cfg.g1, cfg.g2, cfg.J, cfg.delta,
-                cfg.interaction_type,
-                Temp_spin,
-                cfg.tau_1, delta_t, cfg.tau_2, cfg.final_evolution_time,
-            )
-            rho_photon = partial_trace_spins(rho_out, cfg.n_max, cfg.N_spins)
-            offdiag_val = off_diagonal_measure(rho_photon)
-            relentropy_val = relative_entropy_coherence(rho_photon)
-
-            tag = f"{cfg.filename_tag()}_T={Temp_spin:1.2f}_delta_t={delta_t:1.2f}"
-            np.save(os.path.join("data_coherence", f"rho_evolved_{tag}.npy"), rho_out)
-            np.save(os.path.join("data_coherence", f"coherence_measures_{tag}.npy"),
-                    {"offdiag": offdiag_val, "relentropy": relentropy_val})
-
-
-STAGES = {
-    "evolve": stage_evolve,
-    "photon": stage_photon,
-    "observable": stage_observable,
-    "coherence": stage_coherence,
-}
+STAGES = {"validate": stage_validate, "sweep": stage_sweep}
 
 if __name__ == "__main__":
     if len(sys.argv) != 2 or sys.argv[1] not in STAGES:
-        print(f"Usage: python pipeline.py [{'|'.join(STAGES)}]")
-        sys.exit(1)
+        print("Usage: python pipeline.py [validate|sweep]")
+        raise SystemExit(2)
     STAGES[sys.argv[1]]()

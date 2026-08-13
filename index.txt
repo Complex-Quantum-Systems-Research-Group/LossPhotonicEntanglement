@@ -1,51 +1,24 @@
-INDEX
+CORRECTED EP-MOKS REPOSITORY INDEX
 
-This project simulates a hybrid quantum system (two photon modes + interacting spin chain) evolved through a 4-step unitary protocol, then analyzed for entanglement and coherence across a temperature / delay-time parameter sweep.
+Primary representation
+- Two polarization qubits (one per sequential probe photon), not two bosonic occupation modes.
+- Spin bath: finite XXZ spin-1/2 chain using S=sigma/2 convention.
+- MOKE proxy: impulsive polarization rotation U=exp(-i theta sigma_y tensor M_z^probe).
+- Default probe: nonuniform Gaussian-weighted local magnetization.
+- Collective magnetization is an exact delay-independent/random-unitary control.
 
-operators.py : shared low-level building blocks (Pauli matrices, bosonic ladder operators, operator_at_spin_site) used by both hamiltonians.py and observables.py.
+Files
+- operators.py: tensor-product and Pauli helpers.
+- hamiltonians.py: XXZ Hamiltonian, local/collective magnetization, Kerr and exchange generators.
+- states.py: polarization Bell states and stable thermal spin states.
+- new_evolution.py: unitary evolution primitives.
+- new_protocol.py: sequential two-photon protocol.
+- observables.py: partial traces and expectation values.
+- measures.py: entropy, purity, mutual information, l1/relative-entropy coherence, concurrence, Bell fidelity.
+- validation.py: density-matrix and unitarity assertions.
+- pipeline.py: validation and sweep entry points.
+- tests/test_physics.py: analytic/limiting-case tests.
 
-hamiltonians.py : builds bosonic, XXZ spin, and spin-boson coupling Hamiltonians (Tavis-Cummings or Ising-Dicke). Also builds spin-only Hamiltonian for thermal states.
-
-observables.py : expectation values, partial traces (photon and spin), photon number operators, energy and energy variance
-
-states.py : Bell photon states (|i,i> + |j,j>)/sqrt(2), product Fock states, thermal spin density matrices via exp(-bH)/Z
-
-new_evolution.py : unitary evolution rho(t) = U(t) rho_0 U dagger(t) via matrix exponentiation; exposes unitary_from_hamiltonian(H, t) as a standalone function. (evolution.py, an earlier duplicate without this refactor, was removed as dead code.)
-
-new_protocol.py : Hamiltonian-agnostic 4-step pipeline (couple mode 1 to spins for tau_1, free evolve for delta_t, couple mode 2 to spins for tau_2, free evolve) using apply_unitaries(rho, [U1,...,Un]). (protocol.py, the earlier Hamiltonian-specific duplicate, was removed as dead code.)
-
-config.py : single source of truth for sweep parameters (n_max, N_spins, omega1/2, g1/2, J, delta, interaction_type, tau_1/2, final_evolution_time, temperature_list, delta_t_list) and the shared filename_tag() used by all run_*.py scripts.
-
-measures.py : merged coherence.py + entanglement.py. Von Neumann entropy, partial traces per photon mode, mutual information I = S1 + S2 - S12, off-diagonal coherence measure, relative entropy of coherence S(diag rho) - S(rho), Kraus channel application with CPTP check.
-
-compute_reduced_states.py : CLI script: loads full rho(t) array, computes photon and spin reduced states at each time step, saves as .npz
-
-pipeline.py : merged run.py + run_rho_photon.py + run_observable.py + run_coherence.py into one script with four stages, each runnable via `python pipeline.py <stage>`:
-  - evolve     : sweep over (T, delta_t) from config.py, run full pipeline, save evolved rho to ising_dickie/ or tavis_cummings/
-  - photon     : load evolved rho, trace out spins, save photon rho to data_photon/
-  - observable : load photon rho, compute von Neumann entropy and mutual information, save results + summary arrays to data_observable/
-  - coherence  : run full pipeline over (T, delta_t), compute coherence measures, save rho and measures to data_coherence/
-  NOTE: confirm the coherence stage's coupling strength (g1/g2 in config.py vs. the g=20 previously noted here) before running.
-
-id_plot_coherence.ipynb : plots coherence measures for Ising-Dickie model
-id_plot_ob.ipynb : plots observables for Ising-Dickie model
-tc_plot_coherence.ipynb : plots coherence measures for Tavis-Cummings model
-tc_plot_ob.ipynb : plots observables for Tavis-Cummings model
-
-Hilbert space ordering: mode1 x mode2 x spin1 x ... x spinN, dimension n_max^2 x 2^N
-
-WHAT TO RUN AND IN WHAT ORDER
-
-Step 1: python pipeline.py evolve
-Sweeps over all (T, delta_t) combinations from config.py, calls full_pipeline_unitary for each, and saves evolved full density matrices to ising_dickie/ or tavis_cummings/ depending on interaction_type in config.py.
-
-Step 2: python pipeline.py photon
-Run after step 1. Loads each evolved rho, traces out the spin degrees of freedom, and saves the photon reduced density matrix to data_photon/.
-
-Step 3: python pipeline.py observable
-Run after step 2. Loads each photon rho from data_photon/, computes von Neumann entropy and mutual information, saves individual files and summary arrays to data_observable/.
-
-Step 3 (alternative): python pipeline.py coherence
-
-Step 4: corresponding .ipynb file
-plots the data 
+Run before any expensive sweep:
+  python pipeline.py validate
+  pytest -q

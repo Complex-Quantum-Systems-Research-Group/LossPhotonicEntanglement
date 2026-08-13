@@ -1,44 +1,30 @@
+"""Utility for reducing saved full density matrices from the corrected model."""
+from __future__ import annotations
+
+import argparse
 import numpy as np
-from observables import partial_trace_spins, partial_trace_photons
+
+from observables import partial_trace_photons, partial_trace_spins
+from validation import assert_density_matrix
 
 
-def compute_reduced_states(rho_file, n_max, N_spins):
-    # Load the full density matrices
-    data = np.load(rho_file)
-    rho_t = data["rho_t"]
-    times = data["times"]
-
-    nt = len(rho_t)
-
-    # Dimensions
-    dim_p = n_max * n_max
-    dim_s = 2**N_spins
-
-    rho_photon = np.zeros((nt, dim_p, dim_p), dtype=complex)
-    rho_spin   = np.zeros((nt, dim_s, dim_s), dtype=complex)
-
-    # Compute reduced states
-    for t in range(nt):
-        rho_photon[t] = partial_trace_spins(rho_t[t], n_max, N_spins)
-        rho_spin[t]   = partial_trace_photons(rho_t[t], n_max, N_spins)
-
-    # Save results
-    out_file = rho_file.replace("FULL_rho_t", "REDUCED_rho")
-
-    np.savez(
-        out_file,
-        times=times,
-        rho_photon=rho_photon,
-        rho_spin=rho_spin
-    )
-
-    print(f"[OK] Saved reduced states → {out_file}")
+def compute_reduced_states(rho_file: str, n_spins: int, output_file: str | None = None) -> str:
+    rho = np.load(rho_file)
+    assert_density_matrix(rho)
+    rho_photons = partial_trace_spins(rho, n_spins)
+    rho_spins = partial_trace_photons(rho, n_spins)
+    assert_density_matrix(rho_photons)
+    assert_density_matrix(rho_spins)
+    if output_file is None:
+        output_file = rho_file.rsplit(".", 1)[0] + "_reduced.npz"
+    np.savez_compressed(output_file, rho_photons=rho_photons, rho_spins=rho_spins)
+    return output_file
 
 
 if __name__ == "__main__":
-    import sys
-    rho_file = sys.argv[1]
-    n_max    = int(sys.argv[2])
-    N_spins  = int(sys.argv[3])
-
-    compute_reduced_states(rho_file, n_max, N_spins)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("rho_file")
+    parser.add_argument("n_spins", type=int)
+    parser.add_argument("--output")
+    args = parser.parse_args()
+    print(compute_reduced_states(args.rho_file, args.n_spins, args.output))

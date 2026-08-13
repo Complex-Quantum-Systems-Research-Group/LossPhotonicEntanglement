@@ -1,71 +1,68 @@
+"""Linear-algebra building blocks for the EP-MOKS polarization-qubit model.
+
+Hilbert-space ordering throughout the repository is
+    photon_1 x photon_2 x spin_1 x ... x spin_N,
+where each factor is two-dimensional.
+"""
+from __future__ import annotations
+
 import numpy as np
 
 
-def create_pauli_matrices():
-    """Return Pauli matrices and identity"""
-    sigma_x = np.array([[0, 1], [1, 0]], dtype=complex)
-    sigma_y = np.array([[0, -1j], [1j, 0]], dtype=complex)
-    sigma_z = np.array([[1, 0], [0, -1]], dtype=complex)
-    sigma_plus = np.array([[0, 1], [0, 0]], dtype=complex)
-    sigma_minus = np.array([[0, 0], [1, 0]], dtype=complex)
-    id_spin = np.eye(2, dtype=complex)
-
-    return sigma_x, sigma_y, sigma_z, sigma_plus, sigma_minus, id_spin
+I2 = np.eye(2, dtype=complex)
+SX = np.array([[0, 1], [1, 0]], dtype=complex)
+SY = np.array([[0, -1j], [1j, 0]], dtype=complex)
+SZ = np.array([[1, 0], [0, -1]], dtype=complex)
+SP = 0.5 * (SX + 1j * SY)
+SM = 0.5 * (SX - 1j * SY)
 
 
-def create_bosonic_operators(n_max):
-    """Create annihilation, creation, and number operators for bosonic mode"""
-    a = np.diag(np.sqrt(np.arange(1, n_max)), 1)
-    a_dag = a.T
-    n = a_dag @ a
-    id_boson = np.eye(n_max, dtype=complex)
-
-    return a, a_dag, n, id_boson
-
-
-def operator_at_spin_site(op, site, N_spins, n_max):
-    """
-    Apply operator to specific spin site in full Hilbert space
-    Full space: mode1 ⊗ mode2 ⊗ spin1 ⊗ spin2 ⊗ ... ⊗ spinN
-
-    Parameters:
-    -----------
-    op : ndarray
-        2x2 spin operator
-    site : int
-        Which spin (0 to N-1)
-    N_spins : int
-        Total number of spins
-    n_max : int
-        Photon cutoff per mode
-    """
-    result = np.eye(n_max * n_max, dtype=complex)
-
-    id_spin = np.eye(2, dtype=complex)
-    for i in range(N_spins):
-        if i == site:
-            result = np.kron(result, op)
-        else:
-            result = np.kron(result, id_spin)
-
-    return result
+def kron_all(ops):
+    """Kronecker product of a non-empty iterable of matrices."""
+    ops = list(ops)
+    if not ops:
+        raise ValueError("kron_all requires at least one operator")
+    out = np.asarray(ops[0], dtype=complex)
+    for op in ops[1:]:
+        out = np.kron(out, np.asarray(op, dtype=complex))
+    return out
 
 
-def operator_at_spin_site_spin_only(op, site, N_spins):
-    """
-    Apply operator to specific spin site in SPIN-ONLY subspace
-    (no photon modes involved)
+def full_dim(n_spins: int) -> int:
+    """Dimension of the two-photon-qubit plus N-spin Hilbert space."""
+    if n_spins < 1:
+        raise ValueError("n_spins must be >= 1")
+    return 2 ** (n_spins + 2)
 
-    Spin space: spin1 ⊗ spin2 ⊗ ... ⊗ spinN
-    """
-    id_spin = np.eye(2, dtype=complex)
 
-    result = op if site == 0 else id_spin
+def photon_operator(op: np.ndarray, photon: int, n_spins: int) -> np.ndarray:
+    """Embed a 2x2 operator on photon 0 or 1 in the full Hilbert space."""
+    if photon not in (0, 1):
+        raise ValueError("photon must be 0 or 1")
+    factors = [I2, I2] + [I2] * n_spins
+    factors[photon] = np.asarray(op, dtype=complex)
+    return kron_all(factors)
 
-    for i in range(1, N_spins):
-        if i == site:
-            result = np.kron(result, op)
-        else:
-            result = np.kron(result, id_spin)
 
-    return result
+def spin_operator(op: np.ndarray, site: int, n_spins: int) -> np.ndarray:
+    """Embed a 2x2 operator on one spin site in the full Hilbert space."""
+    if not 0 <= site < n_spins:
+        raise ValueError(f"site={site} outside [0, {n_spins})")
+    factors = [I2, I2] + [I2] * n_spins
+    factors[2 + site] = np.asarray(op, dtype=complex)
+    return kron_all(factors)
+
+
+def spin_only_operator(op: np.ndarray, site: int, n_spins: int) -> np.ndarray:
+    """Embed a 2x2 operator on one site in the spin-only Hilbert space."""
+    if not 0 <= site < n_spins:
+        raise ValueError(f"site={site} outside [0, {n_spins})")
+    factors = [I2] * n_spins
+    factors[site] = np.asarray(op, dtype=complex)
+    return kron_all(factors)
+
+
+def embed_spin_only(op_spin: np.ndarray) -> np.ndarray:
+    """Embed a spin-only operator after the two photon-qubit factors."""
+    op_spin = np.asarray(op_spin, dtype=complex)
+    return np.kron(np.eye(4, dtype=complex), op_spin)

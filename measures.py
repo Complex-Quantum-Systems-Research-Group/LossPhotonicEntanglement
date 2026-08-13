@@ -1,59 +1,71 @@
+"""State diagnostics used by the corrected EP-MOKS workflow."""
+from __future__ import annotations
+
 import numpy as np
 
-# ============================================================================
-# ENTANGLEMENT (formerly entanglement.py)
-# ============================================================================
-
-def von_neumann_entropy(rho):
-    """Calculate von Neumann entropy S(rho) = -Tr[rho log rho]"""
-    eigenvals = np.linalg.eigvalsh(rho)
-    eigenvals = eigenvals[eigenvals > 1e-12]
-    return -np.sum(eigenvals * np.log(eigenvals))
+from observables import partial_trace_photon_mode
+from operators import SY
 
 
-def partial_trace_mode2(rho_photon, n_max):
-    """Trace out photon mode 2 to get mode 1 reduced density matrix."""
-    rho_reshaped = rho_photon.reshape(n_max, n_max, n_max, n_max)
-    return np.trace(rho_reshaped, axis1=1, axis2=3)
+def _normalized_hermitian(rho: np.ndarray) -> np.ndarray:
+    rho = np.asarray(rho, dtype=complex)
+    return 0.5 * (rho + rho.conj().T)
 
 
-def partial_trace_mode1(rho_photon, n_max):
-    """Trace out photon mode 1 to get mode 2 reduced density matrix."""
-    rho_reshaped = rho_photon.reshape(n_max, n_max, n_max, n_max)
-    return np.trace(rho_reshaped, axis1=0, axis2=2)
+def von_neumann_entropy(rho: np.ndarray, base: float = 2.0, tol: float = 1e-12) -> float:
+    """Von Neumann entropy.  For the photon pair this quantifies mixedness, not entanglement."""
+    vals = np.linalg.eigvalsh(_normalized_hermitian(rho)).real
+    vals = np.clip(vals, 0.0, None)
+    s = vals.sum()
+    if s <= tol:
+        raise ValueError("density matrix has vanishing trace")
+    vals /= s
+    vals = vals[vals > tol]
+    logs = np.log(vals) / np.log(base)
+    return float(-np.sum(vals * logs))
 
 
-def mutual_information(rho_photon, n_max):
-    """
-    I(1:2) = S(rho_1) + S(rho_2) - S(rho_12)
-    Total correlations (classical + quantum) between the two photon modes.
-    """
-    S_12 = von_neumann_entropy(rho_photon)
-    S_1 = von_neumann_entropy(partial_trace_mode2(rho_photon, n_max))
-    S_2 = von_neumann_entropy(partial_trace_mode1(rho_photon, n_max))
-    return S_1 + S_2 - S_12
+def purity(rho: np.ndarray) -> float:
+    """Tr(rho^2)."""
+    rho = np.asarray(rho, dtype=complex)
+    return float(np.trace(rho @ rho).real)
 
 
-# ============================================================================
-# COHERENCE (formerly coherence.py)
-# ============================================================================
-
-def off_diagonal_measure(rho):
-    """Sum of squared magnitudes of off-diagonal entries of rho."""
-    off_diag = rho - np.diag(np.diag(rho))
-    return np.sum(np.abs(off_diag) ** 2)
+def mutual_information(rho_photons: np.ndarray) -> float:
+    """Total (classical + quantum) correlation between photon polarization qubits."""
+    rho1 = partial_trace_photon_mode(rho_photons, trace_out=1)
+    rho2 = partial_trace_photon_mode(rho_photons, trace_out=0)
+    return von_neumann_entropy(rho1) + von_neumann_entropy(rho2) - von_neumann_entropy(rho_photons)
 
 
-def relative_entropy_coherence(rho):
-    """C_rel(rho) = S(diag(rho)) - S(rho)"""
-    diag_rho = np.diag(np.diag(rho))
-    coherence = von_neumann_entropy(diag_rho) - von_neumann_entropy(rho)
-    return coherence
+def l1_coherence(rho: np.ndarray) -> float:
+    """l1-norm coherence in the computational H/V basis."""
+    rho = np.asarray(rho, dtype=complex)
+    return float(np.sum(np.abs(rho)) - np.sum(np.abs(np.diag(rho))))
 
 
-def apply_kraus_channel(rho, kraus_ops):
-    """Apply a CPTP channel defined by Kraus operators, after checking sum K^dagger K = I."""
-    total = sum(k.conj().T @ k for k in kraus_ops)
-    if not np.allclose(total, np.eye(total.shape[0])):
-        raise ValueError("Kraus operators do not satisfy CPTP condition")
-    return sum(k @ rho @ k.conj().T for k in kraus_ops)
+def relative_entropy_coherence(rho: np.ndarray) -> float:
+    """Relative entropy of coherence in the computational H/V basis."""
+    rho = np.asarray(rho, dtype=complex)
+    diag = np.diag(np.diag(rho))
+    return von_neumann_entropy(diag) - von_neumann_entropy(rho)
+
+
+def concurrence(rho: np.ndarray, tol: float = 1e-12) -> float:
+    """Wootters concurrence for a two-qubit density matrix."""
+    rho = _normalized_hermitian(rho)
+    if rho.shape != (4, 4):
+        raise ValueError("concurrence requires a 4x4 two-qubit density matrix")
+    yy = np.kron(SY, SY)
+    rho_tilde = yy @ rho.conj() @ yy
+    vals = np.linalg.eigvals(rho @ rho_tilde)
+    vals = np.sort(np.sqrt(np.clip(vals.real, 0.0, None)))[::-1]
+    c = vals[0] - vals[1] - vals[2] - vals[3]
+    if abs(c) < tol:
+        c = 0.0
+    return float(np.clip(c, 0.0, 1.0))
+
+
+def bell_fidelity(rho: np.ndarray, bell_rho: np.ndarray) -> float:
+    """Fidelity with a pure target Bell state represented as a rank-1 density matrix."""
+    return float(np.trace(np.asarray(rho) @ np.asarray(bell_rho)).real)

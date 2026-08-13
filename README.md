@@ -1,60 +1,62 @@
-# LM-interaction
+# LossPhotonicEntanglement - corrected pre-results model
 
-Hybrid quantum system simulation: two photon modes coupled to an interacting spin chain, evolved through a 4-step unitary protocol, then analyzed for entanglement and coherence across a temperature / delay-time parameter sweep.
+This revision changes the numerical model so that it matches the proposed observable: **polarization entanglement of two sequential probe photons**.  The previous code used two truncated bosonic modes and the Fock-state superposition `( |0,0> + |1,1> )/sqrt(2)`, which is not the polarization Bell pair described in the manuscript.
 
-Hilbert space ordering: `mode1 x mode2 x spin1 x ... x spinN`, dimension `n_max^2 x 2^N`.
+## Physical model
 
-## Install
+Hilbert-space ordering is
+
+`photon_1 polarization qubit x photon_2 polarization qubit x spin_1 x ... x spin_N`.
+
+The spin bath is a finite open XXZ chain
+
+`H_s = J sum_i [Sx_i Sx_{i+1} + Sy_i Sy_{i+1} + Delta Sz_i Sz_{i+1}] - h_z sum_i Sz_i`,
+
+with `S = sigma/2`, `hbar = k_B = 1`, and `|J|` the default energy scale.
+
+The primary EP-MOKS proxy is an impulsive, magnetization-conditioned polarization rotation
+
+`U_k = exp[-i theta_k sigma_y^(photon k) tensor M_z^(probe)]`.
+
+`M_z^(probe)` is a weighted local magnetization.  A nonuniform spatial profile is the default because a local MOKE spot samples local magnetization and, unlike the total `S_z`, it is not conserved by the XXZ exchange dynamics.  `probe_model="collective"` is retained as an exact control: because total `S_z` commutes with the XXZ Hamiltonian, the reduced two-photon state must be exactly independent of the inter-photon delay.
+
+This is a **coherent effective Kerr-rotation model**, not a microscopic electronic theory of MOKE.  Absorption, polarization-dependent reflectivity, detector loss, and conditional/postselected channels are not included yet.
+
+## Why the old Ising-Dicke/Tavis-Cummings framing was removed
+
+The old `(a+a^dagger) sum sigma_z` coupling displaces a bosonic field and changes occupation number; it is not a polarization rotation.  The Tavis-Cummings interaction describes excitation exchange and is a cavity-QED benchmark, not a direct MOKE Hamiltonian.  An optional `exchange_benchmark` remains in `hamiltonians.py`/`new_protocol.py`, but manuscript claims must not identify it as MOKE.
+
+## Diagnostics
+
+The repository now distinguishes:
+
+- `concurrence`: two-qubit entanglement measure;
+- `mutual_information`: total correlation, not entanglement;
+- photon-pair von Neumann entropy and purity: mixedness;
+- `l1_coherence` and relative entropy of coherence: basis-dependent coherence measures;
+- Bell-state fidelity.
+
+The previous sum of squared off-diagonal elements was removed because it should not be presented as a standard resource-theoretic coherence monotone.
+
+## Required pre-run sequence
 
 ```bash
-pip install -r requirements.txt
+python pipeline.py validate
+pytest -q
 ```
 
-## Run
+Only after those pass should the full sweep be run:
 
 ```bash
-python pipeline.py evolve       # step 1: sweep, save full evolved rho
-python pipeline.py photon       # step 2: trace out spins -> data_photon/
-python pipeline.py observable   # step 3: von Neumann entropy + mutual info
-python pipeline.py coherence    # step 3 (alt): coherence measures, own sweep
+python pipeline.py sweep
 ```
 
-Then run the matching `.ipynb` notebook (not included in this cleanup pass) to plot results.
+Before interpreting a sweep, repeat selected points at larger `N_spins`, narrower grid spacing, and alternative probe profiles.  A finite six-spin chain does not exhibit a thermodynamic phase transition and cannot support claims of critical scaling.
 
-All sweep parameters (`n_max`, `N_spins`, `omega1/2`, `g1/2`, `J`, `delta`, `interaction_type`, `tau_1/2`, `final_evolution_time`, `temperature_list`, `delta_t_list`) live in `config.py`. Edit there, not in `pipeline.py`.
+## Exact control identity
 
-**Known open item:** `pipeline.py`'s `coherence` stage currently uses `g1=g2` from `config.py`; an earlier note in this repo referenced `g=20` for that stage specifically. Confirm which is correct before running.
+For an equal-weight collective probe,
 
-## Modules
+`[H_XXZ, M_z^collective] = 0`.
 
-| File | Purpose |
-|---|---|
-| `operators.py` | Shared building blocks: Pauli matrices, bosonic ladder operators, `operator_at_spin_site`. |
-| `hamiltonians.py` | Bosonic, XXZ spin, and spin-boson coupling Hamiltonians (Tavis-Cummings or Ising-Dicke); spin-only Hamiltonian for thermal states. |
-| `observables.py` | Expectation values, partial traces (photon/spin), photon number operators, energy and energy variance. |
-| `states.py` | Bell photon states, product Fock states, thermal spin density matrices. |
-| `new_evolution.py` | Unitary evolution `rho(t) = U(t) rho_0 U^dagger(t)`; exposes `unitary_from_hamiltonian(H, t)`. |
-| `new_protocol.py` | Hamiltonian-agnostic 4-step pipeline via `apply_unitaries(rho, [U1, ..., Un])`. |
-| `measures.py` | Von Neumann entropy, mutual information, off-diagonal coherence, relative entropy of coherence, Kraus channels. |
-| `compute_reduced_states.py` | CLI: loads a full `rho(t)` array, computes photon and spin reduced states at each time step, saves as `.npz`. |
-| `pipeline.py` | Entry point for the four sweep stages (see Run, above). |
-| `config.py` | Single source of truth for all sweep/model parameters. |
-
-## Data flow
-
-```
-pipeline.py evolve      -> ising_dickie/ or tavis_cummings/   (full rho)
-pipeline.py photon      -> data_photon/                       (photon-reduced rho)
-pipeline.py observable  -> data_observable/                   (entropy, mutual info)
-pipeline.py coherence   -> data_coherence/                    (rho + coherence measures)
-```
-
-## Notes on this cleanup pass
-
-- Removed `evolution.py`, `protocol.py` (dead code, superseded by `new_evolution.py`/`new_protocol.py`).
-- Removed a stray module-level call in `states.py` (`product_photons(4, ...)` executed on import, discarded).
-- Deduplicated `create_pauli_matrices`, `create_bosonic_operators`, `operator_at_spin_site` out of `hamiltonians.py`/`observables.py` into `operators.py`.
-- Merged `coherence.py` + `entanglement.py` -> `measures.py`.
-- Merged `run.py`, `run_rho_photon.py`, `run_observable.py`, `run_coherence.py` -> `pipeline.py`.
-- Centralized sweep parameters into `config.py`.
-- Not checked/fixed: `.gitignore` content, notebook hardcoded Windows paths, duplicate files/folders outside this upload (`.git - Copy/`, `compute_reduced_states - Copy.py`).
+The thermal state is a function of `H_XXZ`, and hence commutes with the conserved magnetization.  The two impulsive Kerr interactions are then conditioned on a static magnetization sector, so tracing out the spins gives a convex mixture of correlated photon-pair unitaries.  Consequently the reduced photon state is random-unitary and exactly independent of the free spin delay.  The test suite enforces this identity.

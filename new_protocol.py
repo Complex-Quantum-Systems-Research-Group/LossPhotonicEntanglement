@@ -1,49 +1,77 @@
-#pipeline that doesn't depend on hamiltonian parameters (hamiltonian agnostic); instead take list of 
-#unitaries and initial density matrix and return the applciation of these unitaries on the initial density
-# matrix. make sure it does same thing as original 
+"""Sequential two-photon EP-MOKS protocol.
+
+Primary model:
+  1. prepare a polarization Bell pair and a thermal XXZ spin state;
+  2. photon 1 receives an impulsive magnetization-conditioned Kerr rotation;
+  3. spins evolve freely for delay Delta t;
+  4. photon 2 receives the same type of Kerr rotation;
+  5. trace out spins and analyze the two-photon polarization state.
+
+The impulsive approximation removes the artificial final free-evolution stage and
+avoids interpreting bosonic occupation entanglement as polarization entanglement.
+"""
+from __future__ import annotations
+
 import numpy as np
-from hamiltonians import build_total_hamiltonian
-from states import bell_photons, thermal_spin_density_matrix
-from new_evolution import unitary_from_hamiltonian
+
+from hamiltonians import (
+    build_spin_hamiltonian_xxz,
+    probe_weights_gaussian,
+    weighted_magnetization_z,
+    kerr_interaction_generator,
+    exchange_interaction_generator,
+)
+from new_evolution import apply_unitaries, unitary_from_generator, unitary_from_hamiltonian
+from operators import embed_spin_only
+from states import bell_polarization_state, thermal_state_from_hamiltonian
 
 
-def apply_unitaries(rho_initial, unitaries):
-    """
-    Hamiltonian-agnostic pipeline.
-    Applies a sequence of unitaries to an initial density matrix.
-
-    rho -> U_n ... U_2 U_1 rho U_1† U_2† ... U_n†
-    """
-    rho = rho_initial
-    for U in unitaries:
-        rho = U @ rho @ U.conj().T
-    return rho
+def build_probe_weights(n_spins: int, probe_model: str, probe_sigma_sites: float = 1.0) -> np.ndarray:
+    if probe_model == "local_gaussian":
+        return probe_weights_gaussian(n_spins, sigma=probe_sigma_sites)
+    if probe_model == "collective":
+        return np.ones(n_spins, dtype=float) / n_spins
+    if probe_model == "single_site":
+        w = np.zeros(n_spins, dtype=float)
+        w[n_spins // 2] = 1.0
+        return w
+    raise ValueError(f"unknown probe_model={probe_model!r}")
 
 
 def full_pipeline_unitary(
-    n_max, N_spins,
-    omega1, omega2,
-    g1, g2, J, delta,
-    interaction_type,
-    Temp_spin,
-    tau_1, delta_t, tau_2, final_evolution_time
-):
-    # initial state
-    rho_photon = bell_photons(n_max, i=0, j=1)
-    rho_matter = thermal_spin_density_matrix(N_spins, J, delta, T=Temp_spin)
-    rho_initial = np.kron(rho_photon, rho_matter)
+    n_spins: int,
+    J: float,
+    delta: float,
+    temperature: float,
+    delta_t: float,
+    theta1: float,
+    theta2: float,
+    probe_model: str = "local_gaussian",
+    probe_sigma_sites: float = 1.0,
+    h_z: float = 0.0,
+    periodic: bool = False,
+    interaction_type: str = "kerr",
+    bell_state: str = "phi_plus",
+) -> np.ndarray:
+    """Return the final full density matrix after the sequential protocol."""
+    Hs = build_spin_hamiltonian_xxz(n_spins, J, delta, h_z=h_z, periodic=periodic)
+    rho_s = thermal_state_from_hamiltonian(Hs, temperature)
+    rho_p = bell_polarization_state(bell_state)
+    rho0 = np.kron(rho_p, rho_s)
 
-    # Hamiltonians (same structure as original pipeline)
-    H1 = build_total_hamiltonian(n_max, N_spins, omega1, omega2, g1, 0, J, delta, interaction_type)
-    H2 = build_total_hamiltonian(n_max, N_spins, omega1, omega2, 0,  0, J, delta, interaction_type)
-    H3 = build_total_hamiltonian(n_max, N_spins, omega1, omega2, 0, g2, J, delta, interaction_type)
-    H4 = build_total_hamiltonian(n_max, N_spins, omega1, omega2, 0,  0, J, delta, interaction_type)
+    weights = build_probe_weights(n_spins, probe_model, probe_sigma_sites)
 
-    # Unitaries
-    U1 = unitary_from_hamiltonian(H1, tau_1)
-    U2 = unitary_from_hamiltonian(H2, delta_t)
-    U3 = unitary_from_hamiltonian(H3, tau_2)
-    U4 = unitary_from_hamiltonian(H4, final_evolution_time)
+    if interaction_type == "kerr":
+        M = weighted_magnetization_z(n_spins, weights)
+        G1 = kerr_interaction_generator(n_spins, 0, M)
+        G2 = kerr_interaction_generator(n_spins, 1, M)
+    elif interaction_type == "exchange_benchmark":
+        G1 = exchange_interaction_generator(n_spins, 0, weights)
+        G2 = exchange_interaction_generator(n_spins, 1, weights)
+    else:
+        raise ValueError(f"unknown interaction_type={interaction_type!r}")
 
-    # Hamiltonian-agnostic application
-    return apply_unitaries(rho_initial, [U1, U2, U3, U4])
+    U1 = unitary_from_generator(G1, theta1)
+    Udelay = unitary_from_hamiltonian(embed_spin_only(Hs), delta_t)
+    U2 = unitary_from_generator(G2, theta2)
+    return apply_unitaries(rho0, [U1, Udelay, U2])

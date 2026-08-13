@@ -1,42 +1,38 @@
+"""Default dimensionless parameters for the corrected pre-results simulation.
+
+Units: hbar = k_B = 1 and |J| sets the spin-energy scale.  These defaults are
+chosen for numerical proof-of-principle, not fitted to a specific material.
+"""
+from __future__ import annotations
+
 import numpy as np
 
-# System size / Hilbert space
-n_max = 2
+# Finite spin chain
 N_spins = 6
+J = -1.0                 # ferromagnetic exchange; sets energy unit
+delta = 1.5              # easy-axis XXZ anisotropy
+h_z = 0.0
+periodic = False
 
-# Hamiltonian parameters
-omega1 = 1.0
-omega2 = 1.5
-g1 = 2.0
-g2 = 2.0
-J = -1.0
-delta = 0.5
-interaction_type = "ising_dickie"  # "ising_dickie" or "tavis_cummings"
+# Probe/sample coupling
+interaction_type = "kerr"          # primary model; "exchange_benchmark" is non-MOKE control
+probe_model = "local_gaussian"     # "collective" is an exact conserved control
+probe_sigma_sites = 1.0
+theta1 = 0.05                       # radians-scale dimensionless Kerr rotation parameter
+theta2 = 0.05
+bell_state = "phi_plus"
 
-# Protocol timing
-tau_1 = 0.05
-tau_2 = 0.05
-final_evolution_time = 2.0
+# Sweeps.  The results section must not be written until convergence/validation is complete.
+temperature_list = np.round(np.arange(0.10, 2.01, 0.10), 10)
+delta_t_list = np.round(np.arange(0.00, 4.01, 0.10), 10)
 
-# Sweep grids
-temperature_list = np.arange(0.05, 2.05, 0.05)
-delta_t_list = np.arange(0.5, 2.05, 0.05)
+# Output
+output_root = "data"
 
 
-def filename_tag():
-    """
-    Shared filename fragment so all pipeline stages agree on naming.
-
-    Includes the interaction model and both photon-spin coupling strengths
-    so results from different models/couplings cannot silently overwrite
-    one another in shared output directories.
-    """
+def filename_tag() -> str:
     return (
-        f"model={interaction_type}_"
-        f"Nspins={N_spins}_nmax={n_max}_"
-        f"omega1={omega1:1.2f}_omega2={omega2:1.2f}_"
-        f"g1={g1:1.2f}_g2={g2:1.2f}_"
-        f"J={J:1.2f}_delta={delta:1.2f}_"
-        f"tau1={tau_1:1.2f}_tau2={tau_2:1.2f}_"
-        f"final_t={final_evolution_time:1.2f}"
+        f"N={N_spins}_J={J:.3g}_Delta={delta:.3g}_hz={h_z:.3g}_"
+        f"probe={probe_model}_sigma={probe_sigma_sites:.3g}_"
+        f"theta1={theta1:.3g}_theta2={theta2:.3g}_int={interaction_type}"
     )
