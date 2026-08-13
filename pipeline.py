@@ -1,10 +1,16 @@
-"""Validated EP-MOKS parameter sweep.
+"""Validated EP-MOKS pre-results workflow.
 
-Run a small validation first:
-    python pipeline.py validate
+Commands
+--------
+python pipeline.py validate
+    Run the analytic/limiting-case preflight checks only.
 
-Then, only after the validation and convergence checks pass:
-    python pipeline.py sweep
+python pipeline.py sweep
+    Re-run the same preflight checks first.  The parameter sweep begins only if
+    every mandatory check passes.
+
+The validation stage is intentionally cheap relative to the full sweep and is
+part of the production execution path, not merely documentation.
 """
 from __future__ import annotations
 
@@ -15,6 +21,12 @@ import sys
 import numpy as np
 
 import config as cfg
+from hamiltonians import (
+    build_spin_hamiltonian_xxz,
+    collective_magnetization_z,
+    probe_weights_gaussian,
+    weighted_magnetization_z,
+)
 from measures import (
     bell_fidelity,
     concurrence,
@@ -24,27 +36,41 @@ from measures import (
     relative_entropy_coherence,
     von_neumann_entropy,
 )
-from new_protocol import full_pipeline_unitary
+from new_protocol import build_protocol_components, full_pipeline_unitary
 from observables import partial_trace_spins
-from states import bell_polarization_state
-from validation import assert_density_matrix, density_matrix_diagnostics
+from states import bell_polarization_state, thermal_state_from_hamiltonian
+from validation import assert_density_matrix, assert_unitary
 
 
-def run_point(T: float, delta_t: float) -> dict:
-    rho_full = full_pipeline_unitary(
+_VALIDATION_ATOL = 1e-10
+
+
+def _assert_close(value: float, target: float, label: str, atol: float = 1e-10) -> None:
+    if not np.isclose(value, target, atol=atol, rtol=0.0):
+        raise AssertionError(f"{label}: expected {target}, got {value}")
+
+
+def _protocol_kwargs() -> dict:
+    return dict(
         n_spins=cfg.N_spins,
         J=cfg.J,
         delta=cfg.delta,
-        temperature=T,
-        delta_t=delta_t,
-        theta1=cfg.theta1,
-        theta2=cfg.theta2,
-        probe_model=cfg.probe_model,
         probe_sigma_sites=cfg.probe_sigma_sites,
         h_z=cfg.h_z,
         periodic=cfg.periodic,
         interaction_type=cfg.interaction_type,
         bell_state=cfg.bell_state,
+    )
+
+
+def run_point(T: float, delta_t: float) -> dict:
+    rho_full = full_pipeline_unitary(
+        temperature=T,
+        delta_t=delta_t,
+        theta1=cfg.theta1,
+        theta2=cfg.theta2,
+        probe_model=cfg.probe_model,
+        **_protocol_kwargs(),
     )
     assert_density_matrix(rho_full)
     rho_p = partial_trace_spins(rho_full, cfg.N_spins)
@@ -64,29 +90,107 @@ def run_point(T: float, delta_t: float) -> dict:
     }
 
 
-def stage_validate() -> None:
-    """Cheap pre-run checks; this is intentionally not the full sweep."""
-    test_points = [
-        (0.2, 0.0),
-        (0.2, 1.0),
-        (1.0, 0.0),
-        (1.0, 1.0),
-    ]
-    print("Running four-point smoke validation...")
-    for T, dt in test_points:
-        result = run_point(T, dt)
-        print(
-            f"T={T:.3g}, dt={dt:.3g}, concurrence={result['concurrence']:.8f}, "
-            f"purity={result['purity']:.8f}, MI={result['mutual_information_bits']:.8f}"
+def _validate_bell_baseline() -> None:
+    rho = bell_polarization_state(cfg.bell_state)
+    assert_density_matrix(rho)
+    _assert_close(concurrence(rho), 1.0, "Bell concurrence", atol=1e-12)
+    _assert_close(mutual_information(rho), 2.0, "Bell mutual information [bits]", atol=1e-12)
+    _assert_close(purity(rho), 1.0, "Bell purity", atol=1e-12)
+    _assert_close(von_neumann_entropy(rho), 0.0, "Bell pair entropy [bits]", atol=1e-12)
+    print("[PASS] Bell baseline: C=1, MI=2 bits, purity=1, S=0")
+
+
+def _validate_zero_coupling_identity() -> None:
+    target = bell_polarization_state(cfg.bell_state)
+    temperatures = sorted({
+        0.0,
+        float(cfg.temperature_list[0]),
+        float(cfg.temperature_list[len(cfg.temperature_list) // 2]),
+        float(cfg.temperature_list[-1]),
+    })
+    delays = sorted({
+        0.0,
+        float(cfg.delta_t_list[0]),
+        float(cfg.delta_t_list[len(cfg.delta_t_list) // 2]),
+        float(cfg.delta_t_list[-1]),
+    })
+
+    worst = 0.0
+    for T in temperatures:
+        for dt in delays:
+            rho_full = full_pipeline_unitary(
+                temperature=T,
+                delta_t=dt,
+                theta1=0.0,
+                theta2=0.0,
+                probe_model=cfg.probe_model,
+                **_protocol_kwargs(),
+            )
+            rho_p = partial_trace_spins(rho_full, cfg.N_spins)
+            assert_density_matrix(rho_p)
+            err = float(np.linalg.norm(rho_p - target))
+            worst = max(worst, err)
+            if err > _VALIDATION_ATOL:
+                raise AssertionError(
+                    f"zero-coupling identity failed at T={T}, dt={dt}: ||rho-rho_Bell||={err}"
+                )
+    print(f"[PASS] zero-coupling identity over {len(temperatures) * len(delays)} controls; worst error={worst:.3e}")
+
+
+def _validate_commutators_and_thermal_state() -> None:
+    Hs = build_spin_hamiltonian_xxz(
+        cfg.N_spins,
+        cfg.J,
+        cfg.delta,
+        h_z=cfg.h_z,
+        periodic=cfg.periodic,
+    )
+
+    M_collective = collective_magnetization_z(cfg.N_spins)
+    comm_collective = float(np.linalg.norm(Hs @ M_collective - M_collective @ Hs))
+    if comm_collective > _VALIDATION_ATOL:
+        raise AssertionError(f"[Hs,Mz_collective] != 0: norm={comm_collective}")
+
+    local_weights = probe_weights_gaussian(cfg.N_spins, sigma=cfg.probe_sigma_sites)
+    M_local = weighted_magnetization_z(cfg.N_spins, local_weights)
+    comm_local = float(np.linalg.norm(Hs @ M_local - M_local @ Hs))
+    if comm_local <= 1e-8:
+        raise AssertionError(
+            "chosen nonuniform Gaussian probe unexpectedly commutes with Hs; "
+            f"commutator norm={comm_local}"
         )
 
-    # Exact control: for collective Mz, [H_XXZ,Mz]=0, so the reduced photon
-    # state must be independent of the free spin delay (up to roundoff).
+    for T in (0.0, float(cfg.temperature_list[0]), float(cfg.temperature_list[-1])):
+        assert_density_matrix(thermal_state_from_hamiltonian(Hs, T))
+
+    print(
+        "[PASS] commutators/thermal state: "
+        f"||[Hs,Mcollective]||={comm_collective:.3e}, "
+        f"||[Hs,Mlocal]||={comm_local:.3e}"
+    )
+
+
+def _validate_protocol_unitaries() -> None:
+    components = build_protocol_components(
+        temperature=float(cfg.temperature_list[len(cfg.temperature_list) // 2]),
+        delta_t=float(cfg.delta_t_list[len(cfg.delta_t_list) // 2]),
+        theta1=cfg.theta1,
+        theta2=cfg.theta2,
+        probe_model=cfg.probe_model,
+        **_protocol_kwargs(),
+    )
+
+    for name in ("U1", "Udelay", "U2"):
+        assert_unitary(components[name], atol=_VALIDATION_ATOL)
+    print("[PASS] U1, Udelay, and U2 satisfy U^dagger U = I")
+
+
+def _validate_collective_delay_independence() -> None:
     kwargs = dict(
         n_spins=cfg.N_spins,
         J=cfg.J,
         delta=cfg.delta,
-        temperature=0.7,
+        temperature=float(cfg.temperature_list[len(cfg.temperature_list) // 2]),
         theta1=cfg.theta1,
         theta2=cfg.theta2,
         probe_model="collective",
@@ -96,16 +200,49 @@ def stage_validate() -> None:
         interaction_type="kerr",
         bell_state=cfg.bell_state,
     )
-    r0 = partial_trace_spins(full_pipeline_unitary(delta_t=0.0, **kwargs), cfg.N_spins)
-    r1 = partial_trace_spins(full_pipeline_unitary(delta_t=1.234, **kwargs), cfg.N_spins)
-    err = np.linalg.norm(r0 - r1)
-    print(f"collective-Mz exact delay-independence error = {err:.3e}")
-    if err > 1e-9:
-        raise AssertionError("collective-Mz delay-independence control failed")
-    print("Validation passed.")
+    dt_a = 0.0
+    dt_b = float(cfg.delta_t_list[-1]) if len(cfg.delta_t_list) else 1.234
+    r0 = partial_trace_spins(full_pipeline_unitary(delta_t=dt_a, **kwargs), cfg.N_spins)
+    r1 = partial_trace_spins(full_pipeline_unitary(delta_t=dt_b, **kwargs), cfg.N_spins)
+    err = float(np.linalg.norm(r0 - r1))
+    if err > _VALIDATION_ATOL:
+        raise AssertionError(f"collective-Mz delay-independence failed: error={err}")
+    print(f"[PASS] collective-Mz delay independence; error={err:.3e}")
+
+
+def _validate_primary_smoke_points() -> None:
+    test_points = [
+        (float(cfg.temperature_list[0]), float(cfg.delta_t_list[0])),
+        (float(cfg.temperature_list[0]), float(cfg.delta_t_list[-1])),
+        (float(cfg.temperature_list[-1]), float(cfg.delta_t_list[0])),
+        (float(cfg.temperature_list[-1]), float(cfg.delta_t_list[-1])),
+    ]
+    for T, dt in test_points:
+        result = run_point(T, dt)
+        print(
+            f"[PASS] smoke T={T:.3g}, dt={dt:.3g}: "
+            f"C={result['concurrence']:.8f}, purity={result['purity']:.8f}, "
+            f"MI={result['mutual_information_bits']:.8f}"
+        )
+
+
+def stage_validate() -> None:
+    """Run the mandatory, cheap preflight controls used to gate the sweep."""
+    print("Running mandatory EP-MOKS pre-run validation...")
+    _validate_bell_baseline()
+    _validate_zero_coupling_identity()
+    _validate_commutators_and_thermal_state()
+    _validate_protocol_unitaries()
+    _validate_collective_delay_independence()
+    _validate_primary_smoke_points()
+    print("All mandatory pre-run validation checks passed.")
 
 
 def stage_sweep() -> None:
+    # Hard gate: a sweep cannot start unless the same mandatory validation
+    # routine advertised by the manuscript succeeds in this process.
+    stage_validate()
+
     os.makedirs(cfg.output_root, exist_ok=True)
     rows = []
     for T in cfg.temperature_list:

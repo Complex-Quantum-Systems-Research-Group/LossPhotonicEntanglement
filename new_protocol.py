@@ -7,8 +7,10 @@ Primary model:
   4. photon 2 receives the same type of Kerr rotation;
   5. trace out spins and analyze the two-photon polarization state.
 
-The impulsive approximation removes the artificial final free-evolution stage and
-avoids interpreting bosonic occupation entanglement as polarization entanglement.
+The impulsive approximation avoids interpreting bosonic occupation entanglement
+as polarization entanglement.  ``build_protocol_components`` exposes the
+Hamiltonian, generators, and unitaries so the pre-run validation can test the
+same operators that the production sweep actually uses.
 """
 from __future__ import annotations
 
@@ -16,10 +18,10 @@ import numpy as np
 
 from hamiltonians import (
     build_spin_hamiltonian_xxz,
+    exchange_interaction_generator,
+    kerr_interaction_generator,
     probe_weights_gaussian,
     weighted_magnetization_z,
-    kerr_interaction_generator,
-    exchange_interaction_generator,
 )
 from new_evolution import apply_unitaries, unitary_from_generator, unitary_from_hamiltonian
 from operators import embed_spin_only
@@ -38,6 +40,65 @@ def build_probe_weights(n_spins: int, probe_model: str, probe_sigma_sites: float
     raise ValueError(f"unknown probe_model={probe_model!r}")
 
 
+def build_protocol_components(
+    n_spins: int,
+    J: float,
+    delta: float,
+    temperature: float,
+    delta_t: float,
+    theta1: float,
+    theta2: float,
+    probe_model: str = "local_gaussian",
+    probe_sigma_sites: float = 1.0,
+    h_z: float = 0.0,
+    periodic: bool = False,
+    interaction_type: str = "kerr",
+    bell_state: str = "phi_plus",
+) -> dict:
+    """Build the exact state/operators/unitaries used by one protocol point.
+
+    Returning these components makes the production path inspectable: validation
+    can directly test Hermiticity, commutators, and U^dagger U without rebuilding
+    a subtly different protocol.
+    """
+    Hs = build_spin_hamiltonian_xxz(n_spins, J, delta, h_z=h_z, periodic=periodic)
+    rho_s = thermal_state_from_hamiltonian(Hs, temperature)
+    rho_p = bell_polarization_state(bell_state)
+    rho0 = np.kron(rho_p, rho_s)
+
+    weights = build_probe_weights(n_spins, probe_model, probe_sigma_sites)
+    probe_operator = None
+
+    if interaction_type == "kerr":
+        probe_operator = weighted_magnetization_z(n_spins, weights)
+        G1 = kerr_interaction_generator(n_spins, 0, probe_operator)
+        G2 = kerr_interaction_generator(n_spins, 1, probe_operator)
+    elif interaction_type == "exchange_benchmark":
+        G1 = exchange_interaction_generator(n_spins, 0, weights)
+        G2 = exchange_interaction_generator(n_spins, 1, weights)
+    else:
+        raise ValueError(f"unknown interaction_type={interaction_type!r}")
+
+    U1 = unitary_from_generator(G1, theta1)
+    Udelay = unitary_from_hamiltonian(embed_spin_only(Hs), delta_t)
+    U2 = unitary_from_generator(G2, theta2)
+
+    return {
+        "Hs": Hs,
+        "rho_spin": rho_s,
+        "rho_photons": rho_p,
+        "rho_initial": rho0,
+        "weights": weights,
+        "probe_operator": probe_operator,
+        "G1": G1,
+        "G2": G2,
+        "U1": U1,
+        "Udelay": Udelay,
+        "U2": U2,
+        "unitaries": (U1, Udelay, U2),
+    }
+
+
 def full_pipeline_unitary(
     n_spins: int,
     J: float,
@@ -54,24 +115,19 @@ def full_pipeline_unitary(
     bell_state: str = "phi_plus",
 ) -> np.ndarray:
     """Return the final full density matrix after the sequential protocol."""
-    Hs = build_spin_hamiltonian_xxz(n_spins, J, delta, h_z=h_z, periodic=periodic)
-    rho_s = thermal_state_from_hamiltonian(Hs, temperature)
-    rho_p = bell_polarization_state(bell_state)
-    rho0 = np.kron(rho_p, rho_s)
-
-    weights = build_probe_weights(n_spins, probe_model, probe_sigma_sites)
-
-    if interaction_type == "kerr":
-        M = weighted_magnetization_z(n_spins, weights)
-        G1 = kerr_interaction_generator(n_spins, 0, M)
-        G2 = kerr_interaction_generator(n_spins, 1, M)
-    elif interaction_type == "exchange_benchmark":
-        G1 = exchange_interaction_generator(n_spins, 0, weights)
-        G2 = exchange_interaction_generator(n_spins, 1, weights)
-    else:
-        raise ValueError(f"unknown interaction_type={interaction_type!r}")
-
-    U1 = unitary_from_generator(G1, theta1)
-    Udelay = unitary_from_hamiltonian(embed_spin_only(Hs), delta_t)
-    U2 = unitary_from_generator(G2, theta2)
-    return apply_unitaries(rho0, [U1, Udelay, U2])
+    components = build_protocol_components(
+        n_spins=n_spins,
+        J=J,
+        delta=delta,
+        temperature=temperature,
+        delta_t=delta_t,
+        theta1=theta1,
+        theta2=theta2,
+        probe_model=probe_model,
+        probe_sigma_sites=probe_sigma_sites,
+        h_z=h_z,
+        periodic=periodic,
+        interaction_type=interaction_type,
+        bell_state=bell_state,
+    )
+    return apply_unitaries(components["rho_initial"], components["unitaries"])

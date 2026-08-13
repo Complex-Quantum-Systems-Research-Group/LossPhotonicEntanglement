@@ -60,3 +60,8 @@ For an equal-weight collective probe,
 `[H_XXZ, M_z^collective] = 0`.
 
 The thermal state is a function of `H_XXZ`, and hence commutes with the conserved magnetization.  The two impulsive Kerr interactions are then conditioned on a static magnetization sector, so tracing out the spins gives a convex mixture of correlated photon-pair unitaries.  Consequently the reduced photon state is random-unitary and exactly independent of the free spin delay.  The test suite enforces this identity.
+
+
+## Validation gate
+
+A sweep is hard-gated by the same mandatory preflight routine described in the manuscript. `python pipeline.py sweep` calls `stage_validate()` before entering the parameter loop and aborts on any failed check. The preflight explicitly tests the Bell baseline, zero-coupling identity, collective/local commutators, thermal-state physicality, `U1`/`Udelay`/`U2` unitarity, collective-probe delay independence, and representative primary-model smoke points. The independent `tests/test_physics.py` suite covers the same analytic/limiting cases under pytest.

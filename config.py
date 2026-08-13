@@ -18,8 +18,8 @@ periodic = False
 interaction_type = "kerr"          # primary model; "exchange_benchmark" is non-MOKE control
 probe_model = "local_gaussian"     # "collective" is an exact conserved control
 probe_sigma_sites = 1.0
-theta1 = 0.05                       # radians-scale dimensionless Kerr rotation parameter
-theta2 = 0.05
+theta1 = 0.05                       # toy-model effective rotation angle; not material-fitted
+theta2 = 0.05                       # same convention as theta1
 bell_state = "phi_plus"
 
 # Sweeps.  The results section must not be written until convergence/validation is complete.

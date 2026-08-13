@@ -12,13 +12,26 @@ Files
 - hamiltonians.py: XXZ Hamiltonian, local/collective magnetization, Kerr and exchange generators.
 - states.py: polarization Bell states and stable thermal spin states.
 - new_evolution.py: unitary evolution primitives.
-- new_protocol.py: sequential two-photon protocol.
+- new_protocol.py: sequential two-photon protocol plus build_protocol_components(), which exposes the exact production unitaries for validation.
 - observables.py: partial traces and expectation values.
 - measures.py: entropy, purity, mutual information, l1/relative-entropy coherence, concurrence, Bell fidelity.
 - validation.py: density-matrix and unitarity assertions.
-- pipeline.py: validation and sweep entry points.
-- tests/test_physics.py: analytic/limiting-case tests.
+- pipeline.py: mandatory preflight validation and gated sweep entry points.
+- tests/test_physics.py: analytic and limiting-case tests.
 
-Run before any expensive sweep:
+Mandatory validation implemented in pipeline.py validate
+1. Bare Bell-state baseline: concurrence=1, MI=2 bits, purity=1, entropy=0.
+2. Zero-coupling identity at multiple temperatures and delays.
+3. Direct matrix commutator checks for collective and localized probes.
+4. Thermal-state Hermiticity, trace, and positivity at T=0 and finite T.
+5. Direct unitarity checks for U1, Udelay, and U2.
+6. Exact collective-probe delay-independence control.
+7. Four corner smoke points for the configured primary model.
+
+Run:
   python pipeline.py validate
   pytest -q
+
+Safety gate:
+  python pipeline.py sweep
+runs stage_validate() first and aborts before entering the sweep loop if any mandatory check fails.
