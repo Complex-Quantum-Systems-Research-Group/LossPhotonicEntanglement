@@ -3,11 +3,18 @@ CORRECTED EP-MOKS REPOSITORY INDEX
 Primary representation
 - Two polarization qubits (one per sequential probe photon), not two bosonic occupation modes.
 - Spin bath: finite XXZ spin-1/2 chain using S=sigma/2 convention.
+- Material anchor: KCuF3 (quasi-1D S=1/2 AFM Heisenberg chain), J~34 meV,
+  arXiv:cond-mat/0503128. Sign convention in this repo: J>0 = antiferromagnetic.
+  Delta=1.0 (isotropic Heisenberg limit) is an explicit modeling approximation;
+  interchain exchange and residual anisotropy are not represented. See README
+  "Material anchoring".
 - MOKE proxy: impulsive polarization rotation U=exp(-i theta sigma_y tensor M_z^probe).
 - Default probe: nonuniform Gaussian-weighted local magnetization.
 - Collective magnetization is an exact delay-independent/random-unitary control.
 
 Files
+- config.py: material/exchange parameters (KCuF3, J_meV, Delta) and dimensionless-to-fs
+  conversion via delay_fs().
 - operators.py: tensor-product and Pauli helpers.
 - hamiltonians.py: XXZ Hamiltonian, local/collective magnetization, Kerr and exchange generators.
 - states.py: polarization Bell states and stable thermal spin states.
@@ -26,7 +33,8 @@ Mandatory validation implemented in pipeline.py validate
 4. Thermal-state Hermiticity, trace, and positivity at T=0 and finite T.
 5. Direct unitarity checks for U1, Udelay, and U2.
 6. Exact collective-probe delay-independence control.
-7. Four corner smoke points for the configured primary model.
+7. Equal-coupling zero-delay invariance for any probe profile (Proposition 4).
+8. Four corner smoke points for the configured primary model.
 
 Run:
   python pipeline.py validate
