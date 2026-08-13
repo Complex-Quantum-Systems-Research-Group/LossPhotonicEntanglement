@@ -11,6 +11,7 @@ from new_protocol import build_protocol_components, full_pipeline_unitary
 from observables import partial_trace_spins
 from states import bell_polarization_state, thermal_state_from_hamiltonian
 from validation import assert_density_matrix, assert_unitary
+from operators import SX, SY, spin_only_operator
 
 
 def test_bell_state_baseline():
@@ -86,6 +87,43 @@ def test_collective_probe_is_delay_independent():
         theta2=0.09,
         probe_model="collective",
     )
-    r0 = partial_trace_spins(full_pipeline_unitary(delta_t=0.0, **kwargs), 4)
-    r1 = partial_trace_spins(full_pipeline_unitary(delta_t=1.337, **kwargs), 4)
+
+    r0 = partial_trace_spins(
+        full_pipeline_unitary(delta_t=0.0, **kwargs), 4
+    )
+    r1 = partial_trace_spins(
+        full_pipeline_unitary(delta_t=1.337, **kwargs), 4
+    )
+
     assert np.linalg.norm(r0 - r1) < 1e-10
+
+
+def test_weighted_magnetization_commutator_identity():
+    n = 5
+    J = -1.0
+    delta = 1.2
+
+    H = build_spin_hamiltonian_xxz(n, J=J, delta=delta)
+    weights = probe_weights_gaussian(n, sigma=0.8)
+    M = weighted_magnetization_z(n, weights)
+
+    lhs = H @ M - M @ H
+
+    rhs = np.zeros_like(H, dtype=complex)
+
+    for i in range(n - 1):
+        sxi = spin_only_operator(SX, i, n)
+        syi = spin_only_operator(SY, i, n)
+        sxj = spin_only_operator(SX, i + 1, n)
+        syj = spin_only_operator(SY, i + 1, n)
+
+        current_pauli = sxi @ syj - syi @ sxj
+
+        rhs += (
+            0.5j
+            * J
+            * (weights[i] - weights[i + 1])
+            * current_pauli
+        )
+
+    assert np.linalg.norm(lhs - rhs) < 1e-12
