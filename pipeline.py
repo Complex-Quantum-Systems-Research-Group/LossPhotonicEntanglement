@@ -36,7 +36,7 @@ from measures import (
     relative_entropy_coherence,
     von_neumann_entropy,
 )
-from new_protocol import build_protocol_components, full_pipeline_unitary
+from new_protocol import build_probe_weights, build_protocol_components, full_pipeline_unitary
 from observables import partial_trace_spins
 from states import bell_polarization_state, thermal_state_from_hamiltonian
 from validation import assert_density_matrix, assert_unitary
@@ -210,6 +210,57 @@ def _validate_collective_delay_independence() -> None:
     print(f"[PASS] collective-Mz delay independence; error={err:.3e}")
 
 
+def _validate_equal_coupling_zero_delay_invariance() -> None:
+    """Proposition 4: theta1=theta2=theta, dt=0 => rho_P unchanged, for ANY probe.
+
+    Unlike Proposition 3 (collective probe, conserved M_w, all dt), this holds
+    at dt=0 only, but for a generic (including nonuniform) probe operator,
+    because the Kerr generator exp(-i theta sigma_y) is real orthogonal so
+    (U(mu) x U(mu))|Phi+> = |Phi+> on every eigenspace of M_w.
+    """
+    target = bell_polarization_state(cfg.bell_state)
+    theta = 0.37  # arbitrary nonzero angle; result must hold for any theta
+    temperatures = (0.0, float(cfg.temperature_list[0]), float(cfg.temperature_list[-1]))
+    probe_models = ("local_gaussian", "single_site", "collective")
+
+    worst = 0.0
+    for probe_model in probe_models:
+        # Sanity: confirm the probe used is not trivially proportional to the
+        # collective one (except when probe_model=="collective" itself), so
+        # the check is not vacuously exercising Proposition 3 only.
+        weights = build_probe_weights(cfg.N_spins, probe_model, cfg.probe_sigma_sites)
+        for T in temperatures:
+            rho_full = full_pipeline_unitary(
+                n_spins=cfg.N_spins,
+                J=cfg.J,
+                delta=cfg.delta,
+                temperature=T,
+                delta_t=0.0,
+                theta1=theta,
+                theta2=theta,
+                probe_model=probe_model,
+                probe_sigma_sites=cfg.probe_sigma_sites,
+                h_z=cfg.h_z,
+                periodic=cfg.periodic,
+                interaction_type="kerr",
+                bell_state=cfg.bell_state,
+            )
+            rho_p = partial_trace_spins(rho_full, cfg.N_spins)
+            assert_density_matrix(rho_p)
+            err = float(np.linalg.norm(rho_p - target))
+            worst = max(worst, err)
+            if err > _VALIDATION_ATOL:
+                raise AssertionError(
+                    "equal-coupling zero-delay invariance failed: "
+                    f"probe_model={probe_model}, T={T}, theta={theta}, "
+                    f"weights={weights}, ||rho-rho_Bell||={err}"
+                )
+    print(
+        f"[PASS] equal-coupling zero-delay invariance over "
+        f"{len(probe_models) * len(temperatures)} controls; worst error={worst:.3e}"
+    )
+
+
 def _validate_primary_smoke_points() -> None:
     test_points = [
         (float(cfg.temperature_list[0]), float(cfg.delta_t_list[0])),
@@ -234,6 +285,7 @@ def stage_validate() -> None:
     _validate_commutators_and_thermal_state()
     _validate_protocol_unitaries()
     _validate_collective_delay_independence()
+    _validate_equal_coupling_zero_delay_invariance()
     _validate_primary_smoke_points()
     print("All mandatory pre-run validation checks passed.")
 

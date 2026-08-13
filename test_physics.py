@@ -98,6 +98,51 @@ def test_collective_probe_is_delay_independent():
     assert np.linalg.norm(r0 - r1) < 1e-10
 
 
+def test_equal_coupling_zero_delay_invariance_any_probe():
+    """Proposition 4: theta1=theta2=theta, dt=0 => rho_P = rho_Bell for any
+    probe profile (nonuniform included), not only the conserved collective one.
+    """
+    target = bell_polarization_state()
+    theta = 0.41  # arbitrary nonzero angle
+    for probe_model in ("local_gaussian", "single_site", "collective"):
+        for T in (0.0, 0.5, 1.8):
+            rho_full = full_pipeline_unitary(
+                n_spins=4,
+                J=-1.0,
+                delta=1.2,
+                temperature=T,
+                delta_t=0.0,
+                theta1=theta,
+                theta2=theta,
+                probe_model=probe_model,
+                probe_sigma_sites=0.8,
+            )
+            rho_p = partial_trace_spins(rho_full, 4)
+            assert np.linalg.norm(rho_p - target) < 1e-10, (
+                f"probe_model={probe_model}, T={T}"
+            )
+
+
+def test_equal_coupling_zero_delay_invariance_fails_for_unequal_theta():
+    """Sanity check that the invariance is specific to theta1=theta2 at dt=0,
+    i.e. the test above is not vacuously true for any theta1, theta2.
+    """
+    target = bell_polarization_state()
+    rho_full = full_pipeline_unitary(
+        n_spins=4,
+        J=-1.0,
+        delta=1.2,
+        temperature=0.5,
+        delta_t=0.0,
+        theta1=0.41,
+        theta2=0.17,
+        probe_model="local_gaussian",
+        probe_sigma_sites=0.8,
+    )
+    rho_p = partial_trace_spins(rho_full, 4)
+    assert np.linalg.norm(rho_p - target) > 1e-6
+
+
 def test_weighted_magnetization_commutator_identity():
     n = 5
     J = -1.0
