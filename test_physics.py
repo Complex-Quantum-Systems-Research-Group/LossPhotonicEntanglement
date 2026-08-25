@@ -172,3 +172,118 @@ def test_weighted_magnetization_commutator_identity():
         )
 
     assert np.linalg.norm(lhs - rhs) < 1e-12
+
+
+def _brute_force_reference_state(
+    n_spins, J, delta, temperature, delta_t, theta1, theta2,
+    probe_model, probe_sigma_sites, interaction_type, bell_state="phi_plus",
+):
+    """Fully independent reference implementation of the protocol, used only
+    by test_fast_path_matches_brute_force_reference below. Deliberately
+    bypasses every performance shortcut in new_evolution.py/new_protocol.py
+    (kerr_rotation_terms, delay_terms, apply_kron_sum, kerr_rotation_unitary,
+    unitary_from_spin_hamiltonian_embedded): it builds the full generators
+    via kron_all and exponentiates the full (4 * 2^n_spins)-dimensional
+    operators directly with scipy.linalg.expm, then applies them via plain
+    dense matrix multiplication. If this ever disagrees with
+    full_pipeline_unitary, the fast path has a bug.
+    """
+    from scipy.linalg import expm
+
+    from hamiltonians import (
+        exchange_interaction_generator,
+        kerr_interaction_generator,
+    )
+    from new_protocol import build_probe_weights
+    from operators import embed_spin_only
+
+    Hs = build_spin_hamiltonian_xxz(n_spins, J, delta)
+    rho_s = thermal_state_from_hamiltonian(Hs, temperature)
+    rho_p = bell_polarization_state(bell_state)
+    rho0 = np.kron(rho_p, rho_s)
+
+    weights = build_probe_weights(n_spins, probe_model, probe_sigma_sites)
+    if interaction_type == "kerr":
+        M = weighted_magnetization_z(n_spins, weights)
+        G1 = kerr_interaction_generator(n_spins, 0, M)
+        G2 = kerr_interaction_generator(n_spins, 1, M)
+    elif interaction_type == "exchange_benchmark":
+        G1 = exchange_interaction_generator(n_spins, 0, weights)
+        G2 = exchange_interaction_generator(n_spins, 1, weights)
+    else:
+        raise ValueError(f"unknown interaction_type={interaction_type!r}")
+
+    U1 = expm(-1j * theta1 * G1)
+    Udelay = expm(-1j * delta_t * embed_spin_only(Hs))
+    U2 = expm(-1j * theta2 * G2)
+
+    out = rho0
+    for U in (U1, Udelay, U2):
+        out = U @ out @ U.conj().T
+    return out
+
+
+def test_fast_path_matches_brute_force_reference():
+    """Regression test: full_pipeline_unitary's fast kron-sum path (the
+    production path used by pipeline.py's sweep loop) must exactly match a
+    fully independent, brute-force dense-expm implementation that bypasses
+    every shortcut in new_evolution.py/new_protocol.py (see
+    _brute_force_reference_state above).
+
+    This is the guard the rest of the suite is missing: pipeline.py's own
+    unitarity checks (test_protocol_unitaries_are_unitary above) only
+    exercise the separate dense-construction path
+    (build_protocol_components -> kerr_rotation_unitary /
+    unitary_from_spin_hamiltonian_embedded), which is used for validation
+    and inspection. The sweep itself calls full_pipeline_unitary, which for
+    interaction_type="kerr" takes an entirely different code path
+    (kerr_rotation_terms / delay_terms / apply_kron_sum, which never forms
+    the dense unitaries at all). Without this test, nothing in the suite
+    directly confirms the two paths agree.
+
+    Covers: both interaction types (kerr and exchange_benchmark), three
+    probe models, a theta=0 edge case, and a delta_t=0 edge case.
+    """
+    n = 5
+    cases = [
+        dict(
+            n_spins=n, J=1.0, delta=1.0, temperature=0.5, delta_t=0.7,
+            theta1=0.31, theta2=0.19, probe_model="local_gaussian",
+            probe_sigma_sites=0.9, interaction_type="kerr",
+        ),
+        dict(
+            n_spins=n, J=1.0, delta=1.0, temperature=0.0, delta_t=0.0,
+            theta1=0.4, theta2=0.4, probe_model="single_site",
+            probe_sigma_sites=1.0, interaction_type="kerr",
+        ),
+        dict(
+            n_spins=n, J=1.0, delta=1.0, temperature=1.3, delta_t=2.1,
+            theta1=0.0, theta2=0.0, probe_model="collective",
+            probe_sigma_sites=1.0, interaction_type="kerr",
+        ),
+        dict(
+            n_spins=n, J=1.0, delta=1.0, temperature=0.8, delta_t=0.6,
+            theta1=0.25, theta2=0.15, probe_model="local_gaussian",
+            probe_sigma_sites=0.9, interaction_type="exchange_benchmark",
+        ),
+    ]
+
+    for case in cases:
+        ref = _brute_force_reference_state(**case)
+        fast = full_pipeline_unitary(
+            n_spins=case["n_spins"],
+            J=case["J"],
+            delta=case["delta"],
+            temperature=case["temperature"],
+            delta_t=case["delta_t"],
+            theta1=case["theta1"],
+            theta2=case["theta2"],
+            probe_model=case["probe_model"],
+            probe_sigma_sites=case["probe_sigma_sites"],
+            interaction_type=case["interaction_type"],
+        )
+        err = np.linalg.norm(ref - fast)
+        assert err < 1e-10, (
+            f"fast path diverged from brute-force reference: {case}, "
+            f"error={err}"
+        )

@@ -63,22 +63,45 @@ def _protocol_kwargs() -> dict:
     )
 
 
-def run_point(T: float, delta_t: float) -> dict:
+def run_point(T: float, delta_t: float, n_spins=None, probe_model=None,
+              probe_sigma_sites=None) -> dict:
+    """Compute all diagnostics for one (T, delta_t) protocol point.
+
+    n_spins, probe_model, and probe_sigma_sites default to the current
+    config values (None means "use cfg.*"); passing them explicitly lets
+    callers (e.g. check_convergence.py) reuse this exact logic -- including
+    the density-matrix validation calls -- to probe other N or probe
+    profiles without duplicating the computation, so a future change here
+    (a bug fix, a new diagnostic) can't silently drift out of sync with a
+    parallel reimplementation elsewhere.
+    """
+    kwargs = _protocol_kwargs()
+    n_spins = cfg.N_spins if n_spins is None else n_spins
+    kwargs["n_spins"] = n_spins
+    if probe_sigma_sites is not None:
+        kwargs["probe_sigma_sites"] = probe_sigma_sites
+    probe_model = cfg.probe_model if probe_model is None else probe_model
+
     rho_full = full_pipeline_unitary(
         temperature=T,
         delta_t=delta_t,
         theta1=cfg.theta1,
         theta2=cfg.theta2,
-        probe_model=cfg.probe_model,
-        **_protocol_kwargs(),
+        probe_model=probe_model,
+        **kwargs,
     )
     assert_density_matrix(rho_full)
-    rho_p = partial_trace_spins(rho_full, cfg.N_spins)
+    rho_p = partial_trace_spins(rho_full, n_spins)
     assert_density_matrix(rho_p)
     target = bell_polarization_state(cfg.bell_state)
     return {
         "T": float(T),
         "delta_t": float(delta_t),
+        "T_kelvin": float(cfg.temperature_kelvin(T)),
+        "delta_t_fs": float(cfg.delay_fs(delta_t)),
+        "n_spins": n_spins,
+        "probe_model": probe_model,
+        "probe_sigma_sites": kwargs["probe_sigma_sites"],
         "entropy_bits": von_neumann_entropy(rho_p),
         "purity": purity(rho_p),
         "mutual_information_bits": mutual_information(rho_p),
