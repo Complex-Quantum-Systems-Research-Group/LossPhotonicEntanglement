@@ -41,6 +41,15 @@ data_observable/
 plot.ipynb
 data_coherence/
 
+# Generated outputs (keep local; never commit)
+figs/
+output/
+outputs/
+results/
+artifacts/
+reports/
+runs/
+
 # -----------------------------------------------------------------------------
 # Logs and temp files
 # -----------------------------------------------------------------------------
