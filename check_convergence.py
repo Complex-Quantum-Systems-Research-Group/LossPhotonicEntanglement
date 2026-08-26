@@ -56,6 +56,8 @@ look, not a substitute.
 from __future__ import annotations
 
 import argparse
+import csv
+import json
 import time
 
 import matplotlib
@@ -66,6 +68,23 @@ import numpy as np
 import config as cfg
 import pipeline
 from plot_results import _load_summary, _figs_dir
+
+
+def _save_comparison_results(name, results, summary_path, metadata):
+    """Persist comparison numbers so conclusions do not depend on a PNG."""
+    reports_dir = summary_path.parent.parent / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = reports_dir / f"{name}.csv"
+    json_path = reports_dir / f"{name}.json"
+
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(results[0]))
+        writer.writeheader()
+        writer.writerows(results)
+    with json_path.open("w", encoding="utf-8") as handle:
+        json.dump({"metadata": metadata, "rows": results}, handle, indent=2)
+        handle.write("\n")
+    print(f"Saved numeric comparison to {csv_path} and {json_path}")
 
 
 def _pick_representative_points(rows, n_temps=2, n_delays=4):
@@ -153,6 +172,15 @@ def cmd_n_convergence(args):
     max_f_diff = max(r["bell_fidelity_diff"] for r in results)
     print(f"\nMax |concurrence diff| = {max_c_diff:.3e}")
     print(f"Max |bell_fidelity diff| = {max_f_diff:.3e}")
+    _save_comparison_results(
+        f"n_convergence_N10_vs_N{args.N}", results, summary_path,
+        {
+            "baseline_N": cfg.N_spins,
+            "comparison_N": args.N,
+            "max_concurrence_diff": max_c_diff,
+            "max_bell_fidelity_diff": max_f_diff,
+        },
+    )
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     x = np.arange(len(results))
@@ -220,6 +248,16 @@ def cmd_probe_profile(args):
             f"{r['profile']:>25} {r['T_kelvin']:6.0f} {r['delta_t_fs']:8.1f} "
             f"{r['default_concurrence']:12.6f} {r['alt_concurrence']:10.6f} {r['concurrence_diff']:10.2e}"
         )
+
+    max_diff = max(r["concurrence_diff"] for r in all_results)
+    _save_comparison_results(
+        "probe_profile_comparison", all_results, summary_path,
+        {
+            "default_probe_model": cfg.probe_model,
+            "default_probe_sigma_sites": cfg.probe_sigma_sites,
+            "max_concurrence_diff": max_diff,
+        },
+    )
 
     fig, ax = plt.subplots(figsize=(9, 5))
     profiles = sorted(set(r["profile"] for r in all_results))
