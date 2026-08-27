@@ -132,8 +132,14 @@ def full_pipeline_unitary(
     n_spins, J, delta, temperature, delta_t, theta1, theta2,
     probe_model="local_gaussian", probe_sigma_sites=1.0, h_z=0.0,
     periodic=False, interaction_type="kerr", bell_state="phi_plus",
+    photon_operator=None,
 ):
-    """Return the final full density matrix after the sequential protocol.
+    """Return the final full photon-spin operator after the protocol.
+
+    ``photon_operator`` may be any 4x4 operator, including a non-Hermitian
+    matrix unit used for Choi reconstruction. No density-matrix assertion is
+    performed here. If omitted, the configured Bell-state density matrix is
+    used, preserving the production-sweep behavior.
 
     For interaction_type="kerr" (the primary model and production sweep
     path), uses the cheap kron-sum apply path (never forms the dense
@@ -143,7 +149,12 @@ def full_pipeline_unitary(
     """
     Hs = build_spin_hamiltonian_xxz(n_spins, J, delta, h_z=h_z, periodic=periodic)
     rho_s = thermal_state_from_hamiltonian(Hs, temperature)
-    rho_p = bell_polarization_state(bell_state)
+    if photon_operator is None:
+        rho_p = bell_polarization_state(bell_state)
+    else:
+        rho_p = np.asarray(photon_operator, dtype=complex)
+        if rho_p.shape != (4, 4):
+            raise ValueError("photon_operator must have shape (4, 4)")
     rho0 = np.kron(rho_p, rho_s)
 
     weights = build_probe_weights(n_spins, probe_model, probe_sigma_sites)
@@ -165,4 +176,5 @@ def full_pipeline_unitary(
         probe_sigma_sites=probe_sigma_sites, h_z=h_z, periodic=periodic,
         interaction_type=interaction_type, bell_state=bell_state,
     )
-    return apply_unitaries(components["rho_initial"], components["unitaries"])
+    initial = rho0 if photon_operator is not None else components["rho_initial"]
+    return apply_unitaries(initial, components["unitaries"])

@@ -98,6 +98,36 @@ def collective_magnetization_z(n_spins: int) -> np.ndarray:
     return weighted_magnetization_z(n_spins, np.ones(n_spins, dtype=float))
 
 
+def weighted_magnetization_commutator_xxz(
+    n_spins: int, J: float, weights, periodic: bool = False,
+) -> np.ndarray:
+    r"""Return the analytic ``[H_XXZ, M_z^(w)]`` bond-current formula.
+
+    With ``M_z^(w) = sum_i w_i sigma_z^i`` and ``S = sigma/2``, this is
+    ``(i J/2) sum_(i,j) (w_i-w_j)(sigma_x^i sigma_y^j - sigma_y^i sigma_x^j)``.
+    The anisotropy and longitudinal-field terms commute with ``M_z^(w)``.
+    """
+    w = np.asarray(weights, dtype=float)
+    if w.shape != (n_spins,):
+        raise ValueError(f"weights must have shape ({n_spins},)")
+    norm = np.sum(np.abs(w))
+    if norm <= 0:
+        raise ValueError("weights must not all vanish")
+    w = w / norm
+
+    result = np.zeros((2**n_spins, 2**n_spins), dtype=complex)
+    bonds = [(i, i + 1) for i in range(n_spins - 1)]
+    if periodic and n_spins > 2:
+        bonds.append((n_spins - 1, 0))
+    for i, j in bonds:
+        sx_i = spin_only_operator(SX, i, n_spins)
+        sy_i = spin_only_operator(SY, i, n_spins)
+        sx_j = spin_only_operator(SX, j, n_spins)
+        sy_j = spin_only_operator(SY, j, n_spins)
+        result += 0.5j * J * (w[i] - w[j]) * (sx_i @ sy_j - sy_i @ sx_j)
+    return result
+
+
 def exchange_generator_spin_only(n_spins: int, weights=None) -> tuple[np.ndarray, np.ndarray]:
     """Weighted collective spin raising/lowering operators for a benchmark model."""
     if weights is None:

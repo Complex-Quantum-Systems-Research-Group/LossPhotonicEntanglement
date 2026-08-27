@@ -24,17 +24,26 @@ Files
 - measures.py: entropy, purity, mutual information, l1/relative-entropy coherence, concurrence, Bell fidelity.
 - validation.py: density-matrix and unitarity assertions.
 - pipeline.py: mandatory preflight validation and gated sweep entry points.
-- tests/test_physics.py: analytic and limiting-case tests.
+- correlations.py: both ordered magnetization correlators and spectral D_M.
+- plot_results.py: recurrence-aware plots, relative weak-coupling diagnostics, and correlator export.
+- channel_diagnostics.py: 16-matrix-unit Choi/CPTP/unitality reconstruction.
+- analyze_results.py: compact machine-readable tables from an existing sweep.
+- test_physics.py: analytic, limiting-case, and fast-path regression tests.
 
 Mandatory validation implemented in pipeline.py validate
 1. Bare Bell-state baseline: concurrence=1, MI=2 bits, purity=1, entropy=0.
 2. Zero-coupling identity at multiple temperatures and delays.
-3. Direct matrix commutator checks for collective and localized probes.
+3. Collective/local commutators plus the localized formula's exact sign and prefactor.
 4. Thermal-state Hermiticity, trace, and positivity at T=0 and finite T.
 5. Direct unitarity checks for U1, Udelay, and U2.
 6. Exact collective-probe delay-independence control.
 7. Equal-coupling zero-delay invariance for any probe profile (Proposition 4).
 8. Four corner smoke points for the configured primary model.
+
+Production defaults use N=10, J=+1 (AFM), theta1=theta2=0.4, and delays
+0..12 hbar/J. theta=0.05 is retained for the coarse `sweep --subgrid`
+weak-coupling campaign; theta=1.0 and (theta1,theta2)=(0.4,0.2) are optional
+nonperturbative and asymmetric campaign settings.
 
 Run:
   python pipeline.py validate

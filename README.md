@@ -22,6 +22,8 @@ The primary EP-MOKS proxy is an impulsive, magnetization-conditioned polarizatio
 
 This is a **coherent effective Kerr-rotation model**, not a microscopic electronic theory of MOKE.  Absorption, polarization-dependent reflectivity, detector loss, and conditional/postselected channels are not included yet.
 
+The production defaults use `theta1 = theta2 = 0.4` to produce a resolvable toy-model signal and scan dimensionless delays from 0 to 12 (about 232 fs for KCuF3), covering multiple finite-chain recurrence times. `weak_coupling_theta = 0.05` is reserved for perturbative validation. Optional campaign settings include `theta_nonperturbative = 1.0` and `theta_asym = (0.4, 0.2)`. These angles are not fitted material parameters.
+
 ## Material anchoring
 
 The first material-anchored production pass targets **KCuF3**, a quasi-1D S=1/2 antiferromagnetic Heisenberg chain with intrachain exchange `J ≈ 34 meV` and near-isotropic exchange (~0.2% x-y anisotropy), Néel temperature `T_N = 39 K`.
@@ -61,7 +63,23 @@ Only after those pass should the full sweep be run:
 python pipeline.py sweep
 ```
 
-Before interpreting a sweep, repeat selected points at larger `N_spins`, narrower grid spacing, and alternative probe profiles.  A finite six-spin chain does not exhibit a thermodynamic phase transition and cannot support claims of critical scaling.
+The production grid is 8 temperatures x 121 delays = 968 points (about 14.1 hours at 52.5 seconds per point). Do not duplicate it for perturbative validation. Instead run the coarse 2-temperature x 10-delay x 3-angle campaign:
+
+```bash
+python pipeline.py sweep --subgrid
+```
+
+Before interpreting a sweep, repeat selected points at larger `N_spins`, narrower grid spacing, and alternative probe profiles. A finite ten-spin chain does not exhibit a thermodynamic phase transition and cannot support claims of critical scaling.
+
+Post-processing commands are:
+
+```bash
+python analyze_results.py
+python plot_results.py
+python channel_diagnostics.py --temperature-k 300 --delta-t 2.0
+```
+
+The channel diagnostic reconstructs all 16 matrix-unit responses before reporting Choi positivity, trace preservation, and unitality; a single Bell-state sweep is not sufficient for a channel-level claim. Both ordered magnetization correlators are exported by `plot_results.py` to `reports/`.
 
 ## Exact control identity
 
@@ -77,4 +95,4 @@ For `theta1 = theta2 = theta` and `delta_t = 0`, the reduced photon state return
 
 ## Validation gate
 
-A sweep is hard-gated by the same mandatory preflight routine described in the manuscript. `python pipeline.py sweep` calls `stage_validate()` before entering the parameter loop and aborts on any failed check. The preflight explicitly tests the Bell baseline, zero-coupling identity, collective/local commutators, thermal-state physicality, `U1`/`Udelay`/`U2` unitarity, collective-probe delay independence, equal-coupling zero-delay invariance, and representative primary-model smoke points. The independent `tests/test_physics.py` suite covers the same analytic/limiting cases under pytest.
+A sweep is hard-gated by the mandatory preflight routine. `python pipeline.py sweep` calls `stage_validate()` before entering the parameter loop and aborts on any failed check. Analytic controls use four spins and test the Bell baseline, zero-coupling identity, collective/local commutators including the local formula's sign and prefactor, thermal-state physicality, `U1`/`Udelay`/`U2` unitarity, nontrivial multi-sector collective-probe delay independence, equal-coupling zero-delay invariance, and representative configured smoke points. A final point uses the configured production size (`N=10`). The independent `test_physics.py` suite also checks analytic limits and the production fast path against a brute-force dense implementation.

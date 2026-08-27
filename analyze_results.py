@@ -106,12 +106,28 @@ def analyze(rows: list[dict], source: Path) -> tuple[list[dict], dict]:
         },
         "largest_concurrence_loss": maximum_loss["maximum_concurrence_loss"],
         "largest_loss_temperature_kelvin": maximum_loss["T_kelvin"],
+        "campaign": rows[0].get("campaign"),
         "interpretation_note": (
             "theta is an effective toy-model coupling unless independently calibrated; "
             "do not interpret this sweep as a quantitative MOKE prediction."
         ),
     }
     return by_temperature, headline
+
+
+def _report_weak_coupling_gate(rows: list[dict]) -> None:
+    """Report applicability of the perturbative residual gate without failing."""
+    first = rows[0]
+    theta1 = float(first.get("theta1", cfg.theta1))
+    theta2 = float(first.get("theta2", cfg.theta2))
+    if not (
+        abs(theta1 - cfg.weak_coupling_theta) <= 1e-12
+        and abs(theta2 - cfg.weak_coupling_theta) <= 1e-12
+    ):
+        print(
+            f"SKIP weak-coupling gate: theta1={theta1:.3g}, theta2={theta2:.3g}; "
+            f"gate applies only to theta={cfg.weak_coupling_theta:.3g}."
+        )
 
 
 def main() -> None:
@@ -123,6 +139,7 @@ def main() -> None:
     rows, source = _load_summary(args.summary)
     if not rows:
         raise ValueError(f"Sweep summary is empty: {source}")
+    _report_weak_coupling_gate(rows)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

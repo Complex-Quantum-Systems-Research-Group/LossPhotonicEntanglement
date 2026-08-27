@@ -49,6 +49,7 @@ results/
 artifacts/
 reports/
 runs/
+.git - Copy/
 
 # -----------------------------------------------------------------------------
 # Logs and temp files

@@ -14,8 +14,10 @@ part of the production execution path, not merely documentation.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
+import re
 import sys
 
 import numpy as np
@@ -26,6 +28,7 @@ from hamiltonians import (
     collective_magnetization_z,
     probe_weights_gaussian,
     weighted_magnetization_z,
+    weighted_magnetization_commutator_xxz,
 )
 from measures import (
     bell_fidelity,
@@ -43,6 +46,7 @@ from validation import assert_density_matrix, assert_unitary
 
 
 _VALIDATION_ATOL = 1e-10
+_VALIDATION_N = min(cfg.N_spins, 4)
 
 
 def _assert_close(value: float, target: float, label: str, atol: float = 1e-10) -> None:
@@ -50,9 +54,9 @@ def _assert_close(value: float, target: float, label: str, atol: float = 1e-10) 
         raise AssertionError(f"{label}: expected {target}, got {value}")
 
 
-def _protocol_kwargs() -> dict:
+def _protocol_kwargs(n_spins=None) -> dict:
     return dict(
-        n_spins=cfg.N_spins,
+        n_spins=cfg.N_spins if n_spins is None else n_spins,
         J=cfg.J,
         delta=cfg.delta,
         probe_sigma_sites=cfg.probe_sigma_sites,
@@ -64,10 +68,10 @@ def _protocol_kwargs() -> dict:
 
 
 def run_point(T: float, delta_t: float, n_spins=None, probe_model=None,
-              probe_sigma_sites=None) -> dict:
+              probe_sigma_sites=None, theta1=None, theta2=None) -> dict:
     """Compute all diagnostics for one (T, delta_t) protocol point.
 
-    n_spins, probe_model, and probe_sigma_sites default to the current
+    n_spins, probe_model, probe_sigma_sites, theta1, and theta2 default to the current
     config values (None means "use cfg.*"); passing them explicitly lets
     callers (e.g. check_convergence.py) reuse this exact logic -- including
     the density-matrix validation calls -- to probe other N or probe
@@ -81,12 +85,14 @@ def run_point(T: float, delta_t: float, n_spins=None, probe_model=None,
     if probe_sigma_sites is not None:
         kwargs["probe_sigma_sites"] = probe_sigma_sites
     probe_model = cfg.probe_model if probe_model is None else probe_model
+    theta1 = cfg.theta1 if theta1 is None else theta1
+    theta2 = cfg.theta2 if theta2 is None else theta2
 
     rho_full = full_pipeline_unitary(
         temperature=T,
         delta_t=delta_t,
-        theta1=cfg.theta1,
-        theta2=cfg.theta2,
+        theta1=theta1,
+        theta2=theta2,
         probe_model=probe_model,
         **kwargs,
     )
@@ -102,6 +108,15 @@ def run_point(T: float, delta_t: float, n_spins=None, probe_model=None,
         "n_spins": n_spins,
         "probe_model": probe_model,
         "probe_sigma_sites": kwargs["probe_sigma_sites"],
+        "J": cfg.J,
+        "J_meV": cfg.J_meV,
+        "delta": cfg.delta,
+        "h_z": cfg.h_z,
+        "periodic": cfg.periodic,
+        "theta1": theta1,
+        "theta2": theta2,
+        "interaction_type": cfg.interaction_type,
+        "bell_state": cfg.bell_state,
         "entropy_bits": von_neumann_entropy(rho_p),
         "purity": purity(rho_p),
         "mutual_information_bits": mutual_information(rho_p),
@@ -147,9 +162,9 @@ def _validate_zero_coupling_identity() -> None:
                 theta1=0.0,
                 theta2=0.0,
                 probe_model=cfg.probe_model,
-                **_protocol_kwargs(),
+                **_protocol_kwargs(_VALIDATION_N),
             )
-            rho_p = partial_trace_spins(rho_full, cfg.N_spins)
+            rho_p = partial_trace_spins(rho_full, _VALIDATION_N)
             assert_density_matrix(rho_p)
             err = float(np.linalg.norm(rho_p - target))
             worst = max(worst, err)
@@ -162,25 +177,35 @@ def _validate_zero_coupling_identity() -> None:
 
 def _validate_commutators_and_thermal_state() -> None:
     Hs = build_spin_hamiltonian_xxz(
-        cfg.N_spins,
+        _VALIDATION_N,
         cfg.J,
         cfg.delta,
         h_z=cfg.h_z,
         periodic=cfg.periodic,
     )
 
-    M_collective = collective_magnetization_z(cfg.N_spins)
+    M_collective = collective_magnetization_z(_VALIDATION_N)
     comm_collective = float(np.linalg.norm(Hs @ M_collective - M_collective @ Hs))
     if comm_collective > _VALIDATION_ATOL:
         raise AssertionError(f"[Hs,Mz_collective] != 0: norm={comm_collective}")
 
-    local_weights = probe_weights_gaussian(cfg.N_spins, sigma=cfg.probe_sigma_sites)
-    M_local = weighted_magnetization_z(cfg.N_spins, local_weights)
+    local_weights = probe_weights_gaussian(_VALIDATION_N, sigma=cfg.probe_sigma_sites)
+    M_local = weighted_magnetization_z(_VALIDATION_N, local_weights)
     comm_local = float(np.linalg.norm(Hs @ M_local - M_local @ Hs))
     if comm_local <= 1e-8:
         raise AssertionError(
             "chosen nonuniform Gaussian probe unexpectedly commutes with Hs; "
             f"commutator norm={comm_local}"
+        )
+
+    comm_formula = weighted_magnetization_commutator_xxz(
+        _VALIDATION_N, cfg.J, local_weights, periodic=cfg.periodic,
+    )
+    formula_residual = float(np.linalg.norm(Hs @ M_local - M_local @ Hs - comm_formula))
+    if formula_residual > 1e-12:
+        raise AssertionError(
+            "weighted-magnetization commutator formula has wrong sign/prefactor: "
+            f"residual={formula_residual}"
         )
 
     for T in (0.0, float(cfg.temperature_list[0]), float(cfg.temperature_list[-1])):
@@ -189,7 +214,7 @@ def _validate_commutators_and_thermal_state() -> None:
     print(
         "[PASS] commutators/thermal state: "
         f"||[Hs,Mcollective]||={comm_collective:.3e}, "
-        f"||[Hs,Mlocal]||={comm_local:.3e}"
+        f"||[Hs,Mlocal]||={comm_local:.3e}, formula residual={formula_residual:.3e}"
     )
 
 
@@ -200,7 +225,7 @@ def _validate_protocol_unitaries() -> None:
         theta1=cfg.theta1,
         theta2=cfg.theta2,
         probe_model=cfg.probe_model,
-        **_protocol_kwargs(),
+        **_protocol_kwargs(_VALIDATION_N),
     )
 
     for name in ("U1", "Udelay", "U2"):
@@ -209,11 +234,12 @@ def _validate_protocol_unitaries() -> None:
 
 
 def _validate_collective_delay_independence() -> None:
+    test_temperature = float(cfg.temperature_list[len(cfg.temperature_list) // 2])
     kwargs = dict(
-        n_spins=cfg.N_spins,
+        n_spins=_VALIDATION_N,
         J=cfg.J,
         delta=cfg.delta,
-        temperature=float(cfg.temperature_list[len(cfg.temperature_list) // 2]),
+        temperature=test_temperature,
         theta1=cfg.theta1,
         theta2=cfg.theta2,
         probe_model="collective",
@@ -225,12 +251,29 @@ def _validate_collective_delay_independence() -> None:
     )
     dt_a = 0.0
     dt_b = float(cfg.delta_t_list[-1]) if len(cfg.delta_t_list) else 1.234
-    r0 = partial_trace_spins(full_pipeline_unitary(delta_t=dt_a, **kwargs), cfg.N_spins)
-    r1 = partial_trace_spins(full_pipeline_unitary(delta_t=dt_b, **kwargs), cfg.N_spins)
+    Hs = build_spin_hamiltonian_xxz(
+        _VALIDATION_N, cfg.J, cfg.delta, h_z=cfg.h_z, periodic=cfg.periodic,
+    )
+    thermal = thermal_state_from_hamiltonian(Hs, test_temperature)
+    magnetization = collective_magnetization_z(_VALIDATION_N)
+    mean = np.trace(thermal @ magnetization)
+    variance = float(
+        np.real(np.trace(thermal @ magnetization @ magnetization) - mean * mean)
+    )
+    if variance <= 1e-8:
+        raise AssertionError(
+            "collective delay-independence control is trivial: thermal state "
+            f"does not populate multiple magnetization sectors (variance={variance})"
+        )
+    r0 = partial_trace_spins(full_pipeline_unitary(delta_t=dt_a, **kwargs), _VALIDATION_N)
+    r1 = partial_trace_spins(full_pipeline_unitary(delta_t=dt_b, **kwargs), _VALIDATION_N)
     err = float(np.linalg.norm(r0 - r1))
     if err > _VALIDATION_ATOL:
         raise AssertionError(f"collective-Mz delay-independence failed: error={err}")
-    print(f"[PASS] collective-Mz delay independence; error={err:.3e}")
+    print(
+        f"[PASS] collective-Mz delay independence; error={err:.3e}, "
+        f"Var(Mz_collective)={variance:.3e}"
+    )
 
 
 def _validate_equal_coupling_zero_delay_invariance() -> None:
@@ -251,10 +294,14 @@ def _validate_equal_coupling_zero_delay_invariance() -> None:
         # Sanity: confirm the probe used is not trivially proportional to the
         # collective one (except when probe_model=="collective" itself), so
         # the check is not vacuously exercising Proposition 3 only.
-        weights = build_probe_weights(cfg.N_spins, probe_model, cfg.probe_sigma_sites)
+        weights = build_probe_weights(_VALIDATION_N, probe_model, cfg.probe_sigma_sites)
+        if probe_model != "collective" and np.allclose(
+            weights, np.full(_VALIDATION_N, 1.0 / _VALIDATION_N), atol=1e-12, rtol=0.0
+        ):
+            raise AssertionError(f"{probe_model} probe unexpectedly became collective")
         for T in temperatures:
             rho_full = full_pipeline_unitary(
-                n_spins=cfg.N_spins,
+                n_spins=_VALIDATION_N,
                 J=cfg.J,
                 delta=cfg.delta,
                 temperature=T,
@@ -268,7 +315,7 @@ def _validate_equal_coupling_zero_delay_invariance() -> None:
                 interaction_type="kerr",
                 bell_state=cfg.bell_state,
             )
-            rho_p = partial_trace_spins(rho_full, cfg.N_spins)
+            rho_p = partial_trace_spins(rho_full, _VALIDATION_N)
             assert_density_matrix(rho_p)
             err = float(np.linalg.norm(rho_p - target))
             worst = max(worst, err)
@@ -285,6 +332,7 @@ def _validate_equal_coupling_zero_delay_invariance() -> None:
 
 
 def _validate_primary_smoke_points() -> None:
+    """Exercise configured parameters through the production algorithm at small N."""
     test_points = [
         (float(cfg.temperature_list[0]), float(cfg.delta_t_list[0])),
         (float(cfg.temperature_list[0]), float(cfg.delta_t_list[-1])),
@@ -292,17 +340,32 @@ def _validate_primary_smoke_points() -> None:
         (float(cfg.temperature_list[-1]), float(cfg.delta_t_list[-1])),
     ]
     for T, dt in test_points:
-        result = run_point(T, dt)
+        result = run_point(T, dt, n_spins=_VALIDATION_N)
         print(
-            f"[PASS] smoke T={T:.3g}, dt={dt:.3g}: "
+            f"[PASS] smoke N={_VALIDATION_N}, T={T:.3g}, dt={dt:.3g}: "
             f"C={result['concurrence']:.8f}, purity={result['purity']:.8f}, "
             f"MI={result['mutual_information_bits']:.8f}"
         )
 
 
+def _validate_production_smoke_point() -> None:
+    """Run one configured N point through the actual production-size path."""
+    T = float(cfg.temperature_list[0])
+    dt = float(cfg.delta_t_list[-1])
+    result = run_point(T, dt, n_spins=cfg.N_spins)
+    print(
+        f"[PASS] production smoke N={cfg.N_spins}, T={T:.3g}, dt={dt:.3g}: "
+        f"C={result['concurrence']:.8f}, purity={result['purity']:.8f}, "
+        f"MI={result['mutual_information_bits']:.8f}"
+    )
+
+
 def stage_validate() -> None:
-    """Run the mandatory, cheap preflight controls used to gate the sweep."""
-    print("Running mandatory EP-MOKS pre-run validation...")
+    """Run analytic controls plus one production-size point to gate the sweep."""
+    print(
+        "Running mandatory EP-MOKS pre-run validation "
+        f"(analytic controls N={_VALIDATION_N}; production smoke N={cfg.N_spins})..."
+    )
     _validate_bell_baseline()
     _validate_zero_coupling_identity()
     _validate_commutators_and_thermal_state()
@@ -310,36 +373,118 @@ def stage_validate() -> None:
     _validate_collective_delay_independence()
     _validate_equal_coupling_zero_delay_invariance()
     _validate_primary_smoke_points()
+    _validate_production_smoke_point()
     print("All mandatory pre-run validation checks passed.")
 
 
-def stage_sweep() -> None:
+def _run_sweep_campaign(temperatures, delays, theta1, theta2, campaign) -> None:
+    """Run and persist one explicitly tagged parameter campaign."""
+    tag = cfg.filename_tag(theta1, theta2)
+    rows = []
+    for T in temperatures:
+        for dt in delays:
+            result = run_point(
+                float(T), float(dt), theta1=float(theta1), theta2=float(theta2)
+            )
+            rho_p = result.pop("rho_photons")
+            result["campaign"] = campaign
+            rows.append(result)
+            campaign_suffix = "" if campaign == "production" else f"_campaign={campaign}"
+            stem = f"{tag}{campaign_suffix}_T={T:.4f}_dt={dt:.4f}"
+            np.save(os.path.join(cfg.output_root, f"rho_photons_{stem}.npy"), rho_p)
+
+    summary_stem = (
+        f"summary_{tag}" if campaign == "production"
+        else f"summary_{tag}_campaign={campaign}"
+    )
+    np.savez_compressed(
+        os.path.join(cfg.output_root, f"{summary_stem}.npz"),
+        rows=np.array(rows, dtype=object),
+    )
+    with open(
+        os.path.join(cfg.output_root, f"{summary_stem}.json"), "w", encoding="utf-8"
+    ) as handle:
+        json.dump(rows, handle, indent=2)
+    print(
+        f"Saved {len(rows)} points for campaign={campaign}, "
+        f"theta1={theta1:.3g}, theta2={theta2:.3g}"
+    )
+
+
+def _sample_grid(values, count, label):
+    """Select ``count`` evenly spaced existing grid values, including endpoints."""
+    if count is None:
+        return values
+    if not 1 <= count <= len(values):
+        raise ValueError(f"--n-{label} must be between 1 and {len(values)}")
+    indices = np.linspace(0, len(values) - 1, count).round().astype(int)
+    return np.asarray(values)[np.unique(indices)]
+
+
+def stage_sweep(subgrid=False, campaign=None, n_temps=None, n_delays=None) -> None:
     # Hard gate: a sweep cannot start unless the same mandatory validation
     # routine advertised by the manuscript succeeds in this process.
     stage_validate()
 
     os.makedirs(cfg.output_root, exist_ok=True)
-    rows = []
-    for T in cfg.temperature_list:
-        for dt in cfg.delta_t_list:
-            result = run_point(float(T), float(dt))
-            rho_p = result.pop("rho_photons")
-            rows.append(result)
-            stem = f"{cfg.filename_tag()}_T={T:.4f}_dt={dt:.4f}"
-            np.save(os.path.join(cfg.output_root, f"rho_photons_{stem}.npy"), rho_p)
+    if subgrid:
+        temperatures = [cfg.temperature_list[0], cfg.temperature_list[-1]]
+        indices = np.linspace(0, len(cfg.delta_t_list) - 1, 10).round().astype(int)
+        delays = cfg.delta_t_list[np.unique(indices)]
+        print(
+            "Running weak-coupling subgrid: "
+            f"{len(temperatures)} temperatures x {len(delays)} delays x "
+            f"{len(cfg.weak_coupling_theta_values)} theta values"
+        )
+        for theta in cfg.weak_coupling_theta_values:
+            _run_sweep_campaign(
+                temperatures, delays, theta, theta,
+                campaign="weak_subgrid",
+            )
+        return
 
-    np.savez_compressed(
-        os.path.join(cfg.output_root, f"summary_{cfg.filename_tag()}.npz"),
-        rows=np.array(rows, dtype=object),
+    if campaign is not None:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", campaign):
+            raise ValueError("campaign must contain only letters, digits, '.', '_' or '-'")
+        temperatures = _sample_grid(cfg.temperature_list, n_temps, "temps")
+        delays = _sample_grid(cfg.delta_t_list, n_delays, "delays")
+        print(
+            f"Running campaign={campaign}: {len(temperatures)} temperatures x "
+            f"{len(delays)} delays"
+        )
+        _run_sweep_campaign(
+            temperatures, delays, cfg.theta1, cfg.theta2, campaign=campaign,
+        )
+        return
+
+    _run_sweep_campaign(
+        cfg.temperature_list, cfg.delta_t_list, cfg.theta1, cfg.theta2,
+        campaign="production",
     )
-    with open(os.path.join(cfg.output_root, f"summary_{cfg.filename_tag()}.json"), "w", encoding="utf-8") as f:
-        json.dump(rows, f, indent=2)
-
-
-STAGES = {"validate": stage_validate, "sweep": stage_sweep}
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or sys.argv[1] not in STAGES:
-        print("Usage: python pipeline.py [validate|sweep]")
-        raise SystemExit(2)
-    STAGES[sys.argv[1]]()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("stage", choices=("validate", "sweep"))
+    parser.add_argument(
+        "--subgrid", action="store_true",
+        help="run the coarse three-theta perturbative campaign (sweep only)",
+    )
+    parser.add_argument("--campaign", help="tag a custom sampled sweep")
+    parser.add_argument("--n-temps", type=int, help="evenly sample this many configured temperatures")
+    parser.add_argument("--n-delays", type=int, help="evenly sample this many configured delays")
+    args = parser.parse_args()
+    if args.subgrid and args.stage != "sweep":
+        parser.error("--subgrid is only valid with the sweep stage")
+    if args.subgrid and args.campaign:
+        parser.error("--subgrid and --campaign are mutually exclusive")
+    if (args.n_temps is not None or args.n_delays is not None) and not args.campaign:
+        parser.error("--n-temps/--n-delays require --campaign to protect production output")
+    if args.campaign and args.stage != "sweep":
+        parser.error("--campaign is only valid with the sweep stage")
+    if args.stage == "validate":
+        stage_validate()
+    else:
+        stage_sweep(
+            subgrid=args.subgrid, campaign=args.campaign,
+            n_temps=args.n_temps, n_delays=args.n_delays,
+        )

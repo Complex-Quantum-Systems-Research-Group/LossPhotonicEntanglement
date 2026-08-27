@@ -135,7 +135,7 @@ def cmd_time_one_point(args):
 
 def cmd_n_convergence(args):
     rows, summary_path = _load_summary()
-    figs_dir = _figs_dir(summary_path)
+    figs_dir = _figs_dir(summary_path, campaign=rows[0].get("campaign"))
     points = _pick_representative_points(rows, n_temps=args.n_temps, n_delays=args.n_delays)
     print(f"Comparing {len(points)} representative points: N=10 (existing) vs N={args.N} (new)")
 
@@ -212,7 +212,7 @@ def cmd_n_convergence(args):
 
 def cmd_probe_profile(args):
     rows, summary_path = _load_summary()
-    figs_dir = _figs_dir(summary_path)
+    figs_dir = _figs_dir(summary_path, campaign=rows[0].get("campaign"))
     points = _pick_representative_points(rows, n_temps=args.n_temps, n_delays=args.n_delays)
 
     alt_profiles = [
