@@ -65,6 +65,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.signal import find_peaks
 import config as cfg
 from correlations import spectral_D_M, spectral_magnetization_correlators
 from measures import bell_fidelity
@@ -150,44 +151,75 @@ def _summary_metadata(rows, summary_path):
 # Section 1: basic diagnostics
 # ---------------------------------------------------------------------
 
-def plot_metric_vs_delay(rows, metric, ylabel, figs_dir, filename, ylim=None):
+def _temperature_delay_grid(rows, value):
+    """Return rectangular temperature/delay coordinates and a value grid."""
     groups = _group_by_temperature(rows)
-    fig, ax = plt.subplots(figsize=(7, 5))
-    cmap = plt.get_cmap("viridis")
-    temps = sorted(groups.keys())
-    n_temps = max(len(temps) - 1, 1)
-    for i, T in enumerate(temps):
-        rs = groups[T]
-        x = [r["delta_t_fs"] for r in rs]
-        y = [r[metric] for r in rs]
+    temperatures = np.asarray(sorted(groups), dtype=float)
+    delays = np.asarray([row["delta_t_fs"] for row in groups[temperatures[0]]])
+    grid = np.asarray([
+        [value(row) for row in groups[temperature]]
+        for temperature in temperatures
+    ], dtype=float)
+    if grid.shape != (len(temperatures), len(delays)):
+        raise ValueError("heatmaps require the same delay grid at every temperature")
+    return temperatures, delays, grid
+
+
+def plot_mixture_weight_heatmap(rows, figs_dir):
+    """Plot the one independent output parameter p = 1 - <Phi+|rho|Phi+>."""
+    temperatures, delays, mixture_weight = _temperature_delay_grid(
+        rows, lambda row: 1.0 - row["bell_fidelity"],
+    )
+    fig, ax = plt.subplots(figsize=(8.5, 5.5))
+    mesh = ax.pcolormesh(delays, temperatures, mixture_weight, shading="auto", cmap="magma")
+    colorbar = fig.colorbar(mesh, ax=ax)
+    colorbar.set_label(r"mixture weight $p=1-F$")
+    ax.set_xlabel("delay (fs)")
+    ax.set_ylabel("temperature (K)")
+    ax.set_title(
+        rf"Exact Bell-mixture weight $p(\Delta t,T)$ "
+        f"({cfg.material}, N={rows[0].get('n_spins', cfg.N_spins)})"
+    )
+    fig.tight_layout()
+    fig.savefig(figs_dir / "mixture_weight_heatmap.png", dpi=180)
+    plt.close(fig)
+
+
+def plot_mixture_weight_cuts(rows, figs_dir):
+    """Show readable delay cuts at low, middle, and high temperature."""
+    groups = _group_by_temperature(rows)
+    temperatures = sorted(groups)
+    selected = sorted({temperatures[0], temperatures[len(temperatures) // 2], temperatures[-1]})
+    fig, ax = plt.subplots(figsize=(7.5, 5))
+    for temperature in selected:
+        group = groups[temperature]
         ax.plot(
-            x, y, marker="o", markersize=3,
-            color=cmap(i / n_temps), label=f"T={T:.0f} K",
+            [row["delta_t_fs"] for row in group],
+            [1.0 - row["bell_fidelity"] for row in group],
+            label=f"T={temperature:.0f} K",
         )
     ax.set_xlabel("delay (fs)")
-    ax.set_ylabel(ylabel)
-    ax.set_title(f"{ylabel} vs delay ({cfg.material}, N={rows[0].get('n_spins', cfg.N_spins)})")
-    if ylim is not None:
-        ax.set_ylim(*ylim)
-    ax.legend(fontsize=8, ncol=2)
+    ax.set_ylabel(r"mixture weight $p=1-F$")
+    ax.set_title("Representative temperature cuts")
+    ax.legend()
     ax.grid(alpha=0.3)
     fig.tight_layout()
-    fig.savefig(figs_dir / filename, dpi=150)
+    fig.savefig(figs_dir / "mixture_weight_selected_cuts.png", dpi=180)
     plt.close(fig)
 
 
 def plot_degradation_vs_temperature(rows, figs_dir):
     groups = _group_by_temperature(rows)
     temps = sorted(groups.keys())
-    max_delay_C = [groups[T][-1]["concurrence"] for T in temps]
-    max_delay_F = [groups[T][-1]["bell_fidelity"] for T in temps]
+    minimum_C = [min(row["concurrence"] for row in groups[T]) for T in temps]
+    minimum_F = [min(row["bell_fidelity"] for row in groups[T]) for T in temps]
 
     fig, ax = plt.subplots(figsize=(7, 5))
-    ax.plot(temps, max_delay_C, marker="o", label="concurrence at max delay")
-    ax.plot(temps, max_delay_F, marker="s", label="Bell fidelity at max delay")
+    ax.plot(temps, minimum_C, marker="o", label=r"$\min_{\Delta t} C$")
+    ax.plot(temps, minimum_F, marker="s", label=r"$\min_{\Delta t} F$")
     ax.set_xlabel("Temperature (K)")
-    ax.set_ylabel("value at longest simulated delay")
-    ax.set_title(f"Degradation vs temperature ({cfg.material})")
+    ax.set_ylabel("minimum over simulated delay")
+    ax.set_title(f"Maximum degradation vs temperature ({cfg.material})")
     ax.axvline(39.0, color="gray", linestyle="--", alpha=0.6, label="$T_N$ = 39 K")
     ax.legend(fontsize=8)
     ax.grid(alpha=0.3)
@@ -196,73 +228,56 @@ def plot_degradation_vs_temperature(rows, figs_dir):
     plt.close(fig)
 
 
-def detect_recurrences(rows, figs_dir, tol=1e-6):
-    """Report finite-chain recurrence steps where a metric increases."""
+def characterize_extrema(rows, figs_dir):
+    """Report physically meaningful extrema and recurrence spacings of p."""
     groups = _group_by_temperature(rows)
-    recurrences = []
-    for T, rs in groups.items():
-        for metric in ("concurrence", "purity", "bell_fidelity"):
-            vals = np.array([r[metric] for r in rs])
-            diffs = np.diff(vals)
-            bad = np.where(diffs > tol)[0]
-            if len(bad) > 0:
-                recurrences.append((T, metric, len(bad), float(diffs[bad].max())))
+    records = []
+    lines = ["Extrema of p=1-F (interior points; 5% prominence threshold):"]
+    for temperature, group in groups.items():
+        delays = np.asarray([row["delta_t_fs"] for row in group])
+        p = 1.0 - np.asarray([row["bell_fidelity"] for row in group])
+        prominence = max(1e-8, 0.05 * float(np.ptp(p)))
+        p_maxima, _ = find_peaks(p, prominence=prominence)
+        p_minima, _ = find_peaks(-p, prominence=prominence)
+        fidelity_minima = delays[p_maxima]
+        fidelity_maxima = delays[p_minima]
+        periods = np.diff(fidelity_maxima)
+        records.append({
+            "T_kelvin": temperature,
+            "prominence_threshold": prominence,
+            "fidelity_minima_fs": ";".join(f"{value:.6g}" for value in fidelity_minima),
+            "fidelity_maxima_fs": ";".join(f"{value:.6g}" for value in fidelity_maxima),
+            "recurrence_periods_fs": ";".join(f"{value:.6g}" for value in periods),
+        })
+        minima_text = ", ".join(f"{value:.1f}" for value in fidelity_minima) or "none"
+        maxima_text = ", ".join(f"{value:.1f}" for value in fidelity_maxima) or "none"
+        period_text = ", ".join(f"{value:.1f}" for value in periods) or "n/a"
+        lines.append(
+            f"T={temperature:.0f} K: F minima [{minima_text}] fs; "
+            f"F maxima [{maxima_text}] fs; periods [{period_text}] fs"
+        )
 
-    fig, ax = plt.subplots(figsize=(7.5, 1.5 + 0.3 * max(len(recurrences), 1)))
+    with (figs_dir / "extrema_summary.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(records[0]))
+        writer.writeheader()
+        writer.writerows(records)
+
+    fig, ax = plt.subplots(figsize=(10, 1.6 + 0.35 * len(records)))
     ax.axis("off")
-    lines = [f"Finite-chain recurrence detection (step tolerance={tol:.0e}):"]
-    if not recurrences:
-        lines.append("  No resolved recurrence steps in this delay window.")
-    else:
-        for T, metric, n, worst in recurrences:
-            lines.append(
-                f"  T={T:.0f}K, {metric}: {n} increasing step(s), "
-                f"worst increase={worst:.2e}"
-            )
     ax.text(0.02, 0.98, "\n".join(lines), va="top", fontsize=9, family="monospace")
     fig.tight_layout()
-    fig.savefig(figs_dir / "recurrence_check.png", dpi=150)
+    fig.savefig(figs_dir / "extrema_recurrence_summary.png", dpi=180)
     plt.close(fig)
-    return recurrences
+    return records
 
 
 def run_basic_diagnostics(rows, figs_dir):
-    plot_metric_vs_delay(
-        rows, "concurrence", "Concurrence", figs_dir,
-        "concurrence_vs_delay.png", ylim=(0, 1.05),
-    )
-    plot_metric_vs_delay(
-        rows, "purity", "Purity", figs_dir,
-        "purity_vs_delay.png", ylim=(0, 1.05),
-    )
-    plot_metric_vs_delay(
-        rows, "bell_fidelity", "Bell fidelity", figs_dir,
-        "bell_fidelity_vs_delay.png", ylim=(0, 1.05),
-    )
-    plot_metric_vs_delay(
-        rows, "mutual_information_bits", "Mutual information (bits)",
-        figs_dir, "mutual_information_vs_delay.png",
-    )
-    plot_metric_vs_delay(
-        rows, "l1_coherence", "$l_1$ coherence", figs_dir,
-        "l1_coherence_vs_delay.png",
-    )
-    plot_metric_vs_delay(
-        rows, "relative_entropy_coherence_bits",
-        "Relative entropy of coherence (bits)", figs_dir,
-        "relative_entropy_coherence_vs_delay.png",
-    )
-    plot_metric_vs_delay(
-        rows, "entropy_bits", "von Neumann entropy (bits)", figs_dir,
-        "entropy_vs_delay.png",
-    )
+    plot_mixture_weight_heatmap(rows, figs_dir)
+    plot_mixture_weight_cuts(rows, figs_dir)
     plot_degradation_vs_temperature(rows, figs_dir)
 
-    recurrences = detect_recurrences(rows, figs_dir)
-    if recurrences:
-        print(f"Detected finite-chain recurrences in {len(recurrences)} metric/temperature series.")
-    else:
-        print("No resolved finite-chain recurrence in this delay window.")
+    extrema = characterize_extrema(rows, figs_dir)
+    print(f"Characterized fidelity extrema at {len(extrema)} temperatures.")
 
 
 # ---------------------------------------------------------------------
@@ -366,6 +381,52 @@ def fit_weak_coupling_exponent(metadata, groups):
     }
 
 
+def plot_second_order_departure_heatmap(rows, figs_dir, metadata):
+    """Plot relative departure of p from the equal-coupling second-order law."""
+    theta1, theta2 = metadata["theta1"], metadata["theta2"]
+    if not np.isclose(theta1, theta2):
+        print("SKIP second-order departure heatmap: theta1 != theta2")
+        return
+
+    groups = _group_by_temperature(rows, sort_key="delta_t")
+    temperatures = np.asarray(sorted(groups), dtype=float)
+    delays_fs = np.asarray([row["delta_t_fs"] for row in groups[temperatures[0]]])
+    relative_departure = []
+    for temperature in temperatures:
+        group = groups[temperature]
+        delays = np.asarray([row["delta_t"] for row in group])
+        # This is a descriptive production comparison, separate from the
+        # weak-coupling validation gate exercised through compute_D_M below.
+        d_m = spectral_D_M(
+            metadata["n_spins"], metadata["J"], metadata["delta"], group[0]["T"], delays,
+            metadata["probe_model"], metadata["probe_sigma_sites"],
+            h_z=metadata["h_z"], periodic=metadata["periodic"],
+        )
+        predicted_p = 2.0 * theta1**2 * d_m
+        simulated_p = 1.0 - np.asarray([row["bell_fidelity"] for row in group])
+        relative_departure.append(np.divide(
+            np.abs(simulated_p - predicted_p), predicted_p,
+            out=np.full_like(predicted_p, np.nan), where=predicted_p > 1e-12,
+        ))
+
+    fig, ax = plt.subplots(figsize=(8.5, 5.5))
+    mesh = ax.pcolormesh(
+        delays_fs, temperatures, np.asarray(relative_departure),
+        shading="auto", cmap="viridis",
+    )
+    colorbar = fig.colorbar(mesh, ax=ax)
+    colorbar.set_label(r"$|p-p_{\rm 2nd}|/p_{\rm 2nd}$")
+    ax.set_xlabel("delay (fs)")
+    ax.set_ylabel("temperature (K)")
+    ax.set_title(
+        rf"Relative departure from $p_{{\rm 2nd}}=2\theta^2D_M$ "
+        f"({cfg.material}, theta={theta1:.3g}, N={metadata['n_spins']})"
+    )
+    fig.tight_layout()
+    fig.savefig(figs_dir / "second_order_relative_departure_heatmap.png", dpi=180)
+    plt.close(fig)
+
+
 def run_weak_coupling_check(rows, figs_dir, summary_path):
     groups = _group_by_temperature(rows, sort_key="delta_t")
     metadata = _summary_metadata(rows, summary_path)
@@ -375,6 +436,7 @@ def run_weak_coupling_check(rows, figs_dir, summary_path):
         and np.isclose(theta2, cfg.weak_coupling_theta)
     )
     theta = theta1 if is_weak_campaign else None
+    plot_second_order_departure_heatmap(rows, figs_dir, metadata)
 
     temps = sorted(groups.keys())
     cmap = plt.get_cmap("viridis")
@@ -431,7 +493,11 @@ def run_weak_coupling_check(rows, figs_dir, summary_path):
     ax_F.legend(fontsize=6, ncol=2)
     ax_F.grid(alpha=0.3)
     fig_F.tight_layout()
-    fig_F.savefig(figs_dir / "bell_fidelity_weak_coupling_check.png", dpi=150)
+    fidelity_filename = (
+        "bell_fidelity_weak_coupling_check.png"
+        if is_weak_campaign else "bell_fidelity_simulated.png"
+    )
+    fig_F.savefig(figs_dir / fidelity_filename, dpi=150)
     plt.close(fig_F)
 
     ax_C.set_xlabel("delay (fs)")
@@ -444,7 +510,11 @@ def run_weak_coupling_check(rows, figs_dir, summary_path):
     ax_C.legend(fontsize=6, ncol=2)
     ax_C.grid(alpha=0.3)
     fig_C.tight_layout()
-    fig_C.savefig(figs_dir / "concurrence_weak_coupling_check.png", dpi=150)
+    concurrence_filename = (
+        "concurrence_weak_coupling_check.png"
+        if is_weak_campaign else "concurrence_simulated.png"
+    )
+    fig_C.savefig(figs_dir / concurrence_filename, dpi=150)
     plt.close(fig_C)
 
     if not is_weak_campaign:
