@@ -44,10 +44,12 @@ probe_model = "local_gaussian"     # "collective" is an exact conserved control
 probe_sigma_sites = 1.0
 theta1 = 0.4                        # production-strength effective angle; not material-fitted
 theta2 = 0.4                        # equal-coupling protocol
+eta1 = 0.0                        # lossless ellipticity (retardance) angle
+eta2 = 0.0
 weak_coupling_theta = 0.05          # reserved for perturbative validation tests
 weak_coupling_theta_values = (0.2, 0.1, weak_coupling_theta)
 theta_nonperturbative = 1.0          # optional campaign outside second-order regime
-theta_asym = (0.4, 0.2)              # unequal-coupling campaign for Im C21 sensitivity
+theta_asym = (0.4, 0.2)              # unequal-coupling rotation control; Im C21 cancels for Phi+
 bell_state = "phi_plus"
 
 # -----------------------------------------------------------------------
@@ -113,11 +115,14 @@ def temperature_kelvin(T_dimensionless):
     return np.asarray(T_dimensionless) * J_meV / K_B_MEV_K
 
 
-def filename_tag(theta1_value=None, theta2_value=None) -> str:
+def filename_tag(theta1_value=None, theta2_value=None, eta1_value=None, eta2_value=None) -> str:
     theta1_value = theta1 if theta1_value is None else theta1_value
     theta2_value = theta2 if theta2_value is None else theta2_value
+    eta1_value = eta1 if eta1_value is None else eta1_value
+    eta2_value = eta2 if eta2_value is None else eta2_value
     return (
         f"mat={material}_N={N_spins}_J={J:.3g}_Delta={delta:.3g}_hz={h_z:.3g}_"
         f"probe={probe_model}_sigma={probe_sigma_sites:.3g}_"
-        f"theta1={theta1_value:.3g}_theta2={theta2_value:.3g}_int={interaction_type}"
+        f"theta1={theta1_value:.3g}_theta2={theta2_value:.3g}_"
+        f"eta1={eta1_value:.8g}_eta2={eta2_value:.8g}_int={interaction_type}"
     )

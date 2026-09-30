@@ -75,6 +75,7 @@ def build_protocol_components(
     n_spins, J, delta, temperature, delta_t, theta1, theta2,
     probe_model="local_gaussian", probe_sigma_sites=1.0, h_z=0.0,
     periodic=False, interaction_type="kerr", bell_state="phi_plus",
+    eta1=0.0, eta2=0.0,
 ):
     """Build the exact state/operators/dense unitaries used by one protocol
     point. Returning these components makes the production path inspectable:
@@ -85,6 +86,8 @@ def build_protocol_components(
     unitarity checks); see module docstring re: full_pipeline_unitary's
     separate cheaper apply-only path for the production sweep.
     """
+    if interaction_type != "kerr" and (eta1 != 0.0 or eta2 != 0.0):
+        raise ValueError("ellipticity is defined only for the Kerr interaction")
     Hs = build_spin_hamiltonian_xxz(n_spins, J, delta, h_z=h_z, periodic=periodic)
     rho_s = thermal_state_from_hamiltonian(Hs, temperature)
     rho_p = bell_polarization_state(bell_state)
@@ -98,10 +101,10 @@ def build_protocol_components(
         # G1, G2 are cheap to form (a single kron_all call, O(dim^2)); only
         # the exponentiation was expensive, so they are still built and
         # returned for inspection/testing.
-        G1 = kerr_interaction_generator(n_spins, 0, probe_operator)
-        G2 = kerr_interaction_generator(n_spins, 1, probe_operator)
-        U1 = kerr_rotation_unitary(theta1, 0, probe_operator)
-        U2 = kerr_rotation_unitary(theta2, 1, probe_operator)
+        G1 = kerr_interaction_generator(n_spins, 0, probe_operator, theta=theta1, eta=eta1)
+        G2 = kerr_interaction_generator(n_spins, 1, probe_operator, theta=theta2, eta=eta2)
+        U1 = kerr_rotation_unitary(theta1, 0, probe_operator, eta=eta1)
+        U2 = kerr_rotation_unitary(theta2, 1, probe_operator, eta=eta2)
     elif interaction_type == "exchange_benchmark":
         G1 = exchange_interaction_generator(n_spins, 0, weights)
         G2 = exchange_interaction_generator(n_spins, 1, weights)
@@ -119,6 +122,7 @@ def build_protocol_components(
         "rho_initial": rho0,
         "weights": weights,
         "probe_operator": probe_operator,
+        "generator_convention": "Kerr G includes both angles; U=exp(-i G). Exchange U=exp(-i theta G).",
         "G1": G1,
         "G2": G2,
         "U1": U1,
@@ -132,7 +136,7 @@ def full_pipeline_unitary(
     n_spins, J, delta, temperature, delta_t, theta1, theta2,
     probe_model="local_gaussian", probe_sigma_sites=1.0, h_z=0.0,
     periodic=False, interaction_type="kerr", bell_state="phi_plus",
-    photon_operator=None,
+    photon_operator=None, eta1=0.0, eta2=0.0,
 ):
     """Return the final full photon-spin operator after the protocol.
 
@@ -147,6 +151,8 @@ def full_pipeline_unitary(
     interaction_type="exchange_benchmark", falls back to
     build_protocol_components + the generic dense apply_unitaries path.
     """
+    if interaction_type != "kerr" and (eta1 != 0.0 or eta2 != 0.0):
+        raise ValueError("ellipticity is defined only for the Kerr interaction")
     Hs = build_spin_hamiltonian_xxz(n_spins, J, delta, h_z=h_z, periodic=periodic)
     rho_s = thermal_state_from_hamiltonian(Hs, temperature)
     if photon_operator is None:
@@ -162,9 +168,9 @@ def full_pipeline_unitary(
     if interaction_type == "kerr":
         probe_operator = weighted_magnetization_z(n_spins, weights)
         terms_sequence = (
-            kerr_rotation_terms(theta1, 0, probe_operator),
+            kerr_rotation_terms(theta1, 0, probe_operator, eta=eta1),
             delay_terms(Hs, delta_t),
-            kerr_rotation_terms(theta2, 1, probe_operator),
+            kerr_rotation_terms(theta2, 1, probe_operator, eta=eta2),
         )
         return apply_kron_sum_sequence(rho0, terms_sequence)
 

@@ -149,21 +149,22 @@ def exchange_generator_spin_only(n_spins: int, weights=None) -> tuple[np.ndarray
     return sp, sm
 
 
-def kerr_interaction_generator(n_spins: int, photon: int, magnetization: np.ndarray) -> np.ndarray:
-    r"""Generator G_k = sigma_y^(photon k) tensor M_z for Kerr rotations.
+def kerr_interaction_generator(n_spins: int, photon: int, magnetization: np.ndarray,
+                               theta: float = 1.0, eta: float = 0.0) -> np.ndarray:
+    r"""Return (theta sigma_y + eta sigma_z)^(k) tensor M.
 
-    U_k(theta) = exp(-i theta G_k).
-
-    In the H/V Jones basis, exp(-i theta sigma_y) is a real polarization
-    rotation.  The material operator M_z makes the rotation conditional on the
-    sampled magnetization.
+    Exponentiate with exp(-i G). Defaults retain the legacy unit-angle
+    rotation generator so existing exp(-i theta G_default) calls still work.
     """
+    if not np.isfinite([theta, eta]).all():
+        raise ValueError("Kerr angles must be finite")
     if photon not in (0, 1):
         raise ValueError("photon must be 0 or 1")
     magnetization = np.asarray(magnetization, dtype=complex)
     if magnetization.shape != (2**n_spins, 2**n_spins):
         raise ValueError("magnetization has incompatible shape")
-    p_factors = [SY if photon == 0 else I2, SY if photon == 1 else I2]
+    axis = theta * SY + eta * SZ
+    p_factors = [axis if photon == 0 else I2, axis if photon == 1 else I2]
     return kron_all(p_factors + [magnetization])
 
 

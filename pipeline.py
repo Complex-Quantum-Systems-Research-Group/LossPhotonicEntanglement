@@ -19,6 +19,9 @@ import json
 import os
 import re
 import sys
+import hashlib
+import subprocess
+from pathlib import Path
 
 import numpy as np
 
@@ -41,8 +44,16 @@ from measures import (
 )
 from new_protocol import build_probe_weights, build_protocol_components, full_pipeline_unitary
 from observables import partial_trace_spins
+from parity_preflight import (
+    PHI_PLUS,
+    PSI_MINUS,
+    analytic_consequences,
+    spin_characteristic_C,
+)
 from states import bell_polarization_state, thermal_state_from_hamiltonian
-from validation import assert_density_matrix, assert_unitary
+from validation import assert_density_matrix, assert_unitary, assert_rank_two_support, assert_unitality
+from ellipticity_preflight import validate_ellipticity, zero_delay_bell_fidelity
+from channel_diagnostics import apply_photon_channel
 
 
 _VALIDATION_ATOL = 1e-10
@@ -68,7 +79,7 @@ def _protocol_kwargs(n_spins=None) -> dict:
 
 
 def run_point(T: float, delta_t: float, n_spins=None, probe_model=None,
-              probe_sigma_sites=None, theta1=None, theta2=None) -> dict:
+              probe_sigma_sites=None, theta1=None, theta2=None, eta1=None, eta2=None) -> dict:
     """Compute all diagnostics for one (T, delta_t) protocol point.
 
     n_spins, probe_model, probe_sigma_sites, theta1, and theta2 default to the current
@@ -87,12 +98,14 @@ def run_point(T: float, delta_t: float, n_spins=None, probe_model=None,
     probe_model = cfg.probe_model if probe_model is None else probe_model
     theta1 = cfg.theta1 if theta1 is None else theta1
     theta2 = cfg.theta2 if theta2 is None else theta2
+    eta1 = cfg.eta1 if eta1 is None else eta1
+    eta2 = cfg.eta2 if eta2 is None else eta2
 
     rho_full = full_pipeline_unitary(
         temperature=T,
         delta_t=delta_t,
         theta1=theta1,
-        theta2=theta2,
+        theta2=theta2, eta1=eta1, eta2=eta2,
         probe_model=probe_model,
         **kwargs,
     )
@@ -100,7 +113,25 @@ def run_point(T: float, delta_t: float, n_spins=None, probe_model=None,
     rho_p = partial_trace_spins(rho_full, n_spins)
     assert_density_matrix(rho_p)
     target = bell_polarization_state(cfg.bell_state)
+    rotation_support = (cfg.interaction_type == "kerr" and cfg.bell_state == "phi_plus"
+                        and eta1 == 0.0 and eta2 == 0.0)
+    if rotation_support:
+        assert_rank_two_support(rho_p)
+    bell_vectors = {"phi_plus": [1,0,0,1], "phi_minus": [1,0,0,-1],
+                    "psi_plus": [0,1,1,0], "psi_minus": [0,1,-1,0]}
+    populations = {name: float(np.vdot(np.asarray(v)/np.sqrt(2),
+                   rho_p @ (np.asarray(v)/np.sqrt(2))).real)
+                   for name, v in bell_vectors.items()}
+    fidelity_zero_delay = None
+    if delta_t == 0.0 and cfg.interaction_type == "kerr" and cfg.bell_state == "phi_plus":
+        weights = build_probe_weights(n_spins, probe_model, kwargs["probe_sigma_sites"])
+        M = weighted_magnetization_z(n_spins, weights)
+        H = build_spin_hamiltonian_xxz(n_spins, cfg.J, cfg.delta, cfg.h_z, cfg.periodic)
+        fidelity_zero_delay = zero_delay_bell_fidelity(
+            theta1, eta1, theta2, eta2, M, thermal_state_from_hamiltonian(H, T))
+        _assert_close(bell_fidelity(rho_p, target), fidelity_zero_delay, "zero-delay fidelity")
     return {
+        "zero_delay_fidelity_prediction": fidelity_zero_delay,
         "T": float(T),
         "delta_t": float(delta_t),
         "T_kelvin": float(cfg.temperature_kelvin(T)),
@@ -115,6 +146,17 @@ def run_point(T: float, delta_t: float, n_spins=None, probe_model=None,
         "periodic": cfg.periodic,
         "theta1": theta1,
         "theta2": theta2,
+        "eta1": eta1,
+        "eta2": eta2,
+        "theory_status": ("exploratory_ellipticity_delay" if (eta1 or eta2) and delta_t != 0
+                          else "exact_zero_delay_control" if (eta1 or eta2)
+                          else "rotation_only"),
+        "rotation_only_support_applies": rotation_support,
+        "bell_mixture_collapse_applies": rotation_support and cfg.h_z == 0.0,
+        "bell_populations": populations,
+        "p": populations["psi_minus"] if rotation_support else None,
+        "Im_C": float(2*np.vdot(PHI_PLUS, rho_p @ PSI_MINUS).real) if rotation_support else None,
+        "bell_infidelity": 1.0 - bell_fidelity(rho_p, target),
         "interaction_type": cfg.interaction_type,
         "bell_state": cfg.bell_state,
         "entropy_bits": von_neumann_entropy(rho_p),
@@ -223,7 +265,7 @@ def _validate_protocol_unitaries() -> None:
         temperature=float(cfg.temperature_list[len(cfg.temperature_list) // 2]),
         delta_t=float(cfg.delta_t_list[len(cfg.delta_t_list) // 2]),
         theta1=cfg.theta1,
-        theta2=cfg.theta2,
+        theta2=cfg.theta2, eta1=cfg.eta1, eta2=cfg.eta2,
         probe_model=cfg.probe_model,
         **_protocol_kwargs(_VALIDATION_N),
     )
@@ -241,7 +283,7 @@ def _validate_collective_delay_independence() -> None:
         delta=cfg.delta,
         temperature=test_temperature,
         theta1=cfg.theta1,
-        theta2=cfg.theta2,
+        theta2=cfg.theta2, eta1=cfg.eta1, eta2=cfg.eta2,
         probe_model="collective",
         probe_sigma_sites=cfg.probe_sigma_sites,
         h_z=cfg.h_z,
@@ -326,8 +368,62 @@ def _validate_equal_coupling_zero_delay_invariance() -> None:
                     f"weights={weights}, ||rho-rho_Bell||={err}"
                 )
     print(
-        f"[PASS] equal-coupling zero-delay invariance over "
+        f"[PASS] rotation-only equal-coupling zero-delay invariance over "
         f"{len(probe_models) * len(temperatures)} controls; worst error={worst:.3e}"
+    )
+
+
+def _validate_parity_identity() -> None:
+    """Gate Props. 6a/6b and the exact Im(C) consequences before a sweep."""
+    n_spins = 6
+    theta = 0.4
+    delay = 3.0
+    temperature = 0.76
+    worst = 0.0
+    for h_z in (0.0, 0.1, 0.5):
+        C = spin_characteristic_C(
+            n_spins=n_spins, J=cfg.J, delta=cfg.delta, h_z=h_z,
+            temperature=temperature, delay=delay,
+            theta1=theta, theta2=theta,
+            probe_model=cfg.probe_model,
+            probe_sigma_sites=cfg.probe_sigma_sites,
+            periodic=cfg.periodic,
+        )
+        rho_full = full_pipeline_unitary(
+            n_spins=n_spins, J=cfg.J, delta=cfg.delta, h_z=h_z,
+            temperature=temperature, delta_t=delay,
+            theta1=theta, theta2=theta,
+            probe_model=cfg.probe_model,
+            probe_sigma_sites=cfg.probe_sigma_sites,
+            periodic=cfg.periodic, interaction_type="kerr",
+            bell_state="phi_plus",
+        )
+        rho_p = partial_trace_spins(rho_full, n_spins)
+        assert_density_matrix(rho_p, atol=1e-12)
+        p_a, coh_a, cl1_a = analytic_consequences(C)
+        observed = (
+            float(np.vdot(PHI_PLUS, rho_p @ PHI_PLUS).real),
+            float(abs(np.vdot(PHI_PLUS, rho_p @ PSI_MINUS))),
+            l1_coherence(rho_p),
+        )
+        expected = (1.0 - p_a, coh_a, cl1_a)
+        errors = np.abs(np.asarray(observed) - np.asarray(expected))
+        worst = max(worst, float(errors.max()))
+        if np.any(errors > 1e-12):
+            raise AssertionError(
+                f"parity analytic identity failed at h_z={h_z}: "
+                f"observed={observed}, expected={expected}, errors={errors}"
+            )
+        rank = int(np.count_nonzero(np.linalg.eigvalsh(rho_p) > 1e-12))
+        if rank > 2:
+            raise AssertionError(f"rank-two support failed at h_z={h_z}: rank={rank}")
+        if h_z == 0.0 and abs(C.imag) > 1e-14:
+            raise AssertionError(f"spin-flip parity failed to make C real: Im(C)={C.imag}")
+        if h_z != 0.0 and abs(C.imag) <= 1e-6:
+            raise AssertionError(f"broken-parity control is insensitive at h_z={h_z}: Im(C)={C.imag}")
+    print(
+        "[PASS] rotation-only parity identity/rank-two support at h_z=0,0.1,0.5; "
+        f"worst analytic residual={worst:.3e}"
     )
 
 
@@ -360,7 +456,7 @@ def _validate_production_smoke_point() -> None:
     )
 
 
-def stage_validate() -> None:
+def stage_validate() -> dict:
     """Run analytic controls plus one production-size point to gate the sweep."""
     print(
         "Running mandatory EP-MOKS pre-run validation "
@@ -372,12 +468,24 @@ def stage_validate() -> None:
     _validate_protocol_unitaries()
     _validate_collective_delay_independence()
     _validate_equal_coupling_zero_delay_invariance()
+    _validate_parity_identity()
+    elliptical_checks = validate_ellipticity()
+    print(f"[PASS] elliptical reference controls: {elliptical_checks}")
+    protocol = dict(n_spins=_VALIDATION_N, J=cfg.J, delta=cfg.delta,
+                    temperature=0.7, delta_t=1.7, theta1=cfg.theta1, theta2=cfg.theta2,
+                    eta1=cfg.eta1, eta2=cfg.eta2, probe_model=cfg.probe_model,
+                    probe_sigma_sites=cfg.probe_sigma_sites, h_z=cfg.h_z, periodic=cfg.periodic)
+    residual = assert_unitality(apply_photon_channel(np.eye(4), **protocol))
+    print(f"[PASS] configured Kerr channel unitality residual={residual:.3e}")
     _validate_primary_smoke_points()
     _validate_production_smoke_point()
     print("All mandatory pre-run validation checks passed.")
+    return {"passed": True, "tolerance": _VALIDATION_ATOL,
+            "ellipticity_reference": elliptical_checks,
+            "configured_kerr_unitality_residual": residual}
 
 
-def _run_sweep_campaign(temperatures, delays, theta1, theta2, campaign) -> None:
+def _run_sweep_campaign(temperatures, delays, theta1, theta2, campaign, validation=None) -> None:
     """Run and persist one explicitly tagged parameter campaign."""
     tag = cfg.filename_tag(theta1, theta2)
     rows = []
@@ -397,6 +505,24 @@ def _run_sweep_campaign(temperatures, delays, theta1, theta2, campaign) -> None:
         f"summary_{tag}" if campaign == "production"
         else f"summary_{tag}_campaign={campaign}"
     )
+    sources = sorted(Path(__file__).parent.glob("*.py"))
+    revision = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True)
+    manifest = {
+        "code_commit": revision.stdout.strip() if revision.returncode == 0 else None,
+        "source_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},
+        "config_source": Path(cfg.__file__).read_text(encoding="utf-8"),
+        "parameters": {k: v for k, v in rows[0].items() if k in (
+            "n_spins", "J", "J_meV", "delta", "h_z", "periodic", "probe_model",
+            "probe_sigma_sites", "theta1", "theta2", "eta1", "eta2", "bell_state", "interaction_type")},
+        "probe_weights": build_probe_weights(cfg.N_spins, cfg.probe_model, cfg.probe_sigma_sites).tolist(),
+        "units": "hbar=k_B=1; energies in J; delays in hbar/J; M=sum(w_i sigma_z_i)",
+        "validation": validation,
+        "theory_status": sorted({row["theory_status"] for row in rows}),
+        "temperatures": [float(t) for t in temperatures], "delays": [float(t) for t in delays],
+    }
+    with open(os.path.join(cfg.output_root, f"manifest_{tag}_campaign={campaign}.json"),
+              "w", encoding="utf-8") as handle:
+        json.dump(manifest, handle, indent=2)
     np.savez_compressed(
         os.path.join(cfg.output_root, f"{summary_stem}.npz"),
         rows=np.array(rows, dtype=object),
@@ -424,7 +550,9 @@ def _sample_grid(values, count, label):
 def stage_sweep(subgrid=False, campaign=None, n_temps=None, n_delays=None) -> None:
     # Hard gate: a sweep cannot start unless the same mandatory validation
     # routine advertised by the manuscript succeeds in this process.
-    stage_validate()
+    if subgrid and (cfg.eta1 != 0.0 or cfg.eta2 != 0.0):
+        raise ValueError("weak subgrid uses the rotation-only prediction; set eta1=eta2=0")
+    validation = stage_validate()
 
     os.makedirs(cfg.output_root, exist_ok=True)
     if subgrid:
@@ -439,7 +567,7 @@ def stage_sweep(subgrid=False, campaign=None, n_temps=None, n_delays=None) -> No
         for theta in cfg.weak_coupling_theta_values:
             _run_sweep_campaign(
                 temperatures, delays, theta, theta,
-                campaign="weak_subgrid",
+                campaign="weak_subgrid", validation=validation,
             )
         return
 
@@ -453,13 +581,13 @@ def stage_sweep(subgrid=False, campaign=None, n_temps=None, n_delays=None) -> No
             f"{len(delays)} delays"
         )
         _run_sweep_campaign(
-            temperatures, delays, cfg.theta1, cfg.theta2, campaign=campaign,
+            temperatures, delays, cfg.theta1, cfg.theta2, campaign=campaign, validation=validation,
         )
         return
 
     _run_sweep_campaign(
         cfg.temperature_list, cfg.delta_t_list, cfg.theta1, cfg.theta2,
-        campaign="production",
+        campaign="production", validation=validation,
     )
 
 if __name__ == "__main__":
@@ -472,7 +600,16 @@ if __name__ == "__main__":
     parser.add_argument("--campaign", help="tag a custom sampled sweep")
     parser.add_argument("--n-temps", type=int, help="evenly sample this many configured temperatures")
     parser.add_argument("--n-delays", type=int, help="evenly sample this many configured delays")
+    parser.add_argument("--eta1", type=float, default=cfg.eta1, help="photon 1 ellipticity angle")
+    parser.add_argument("--eta2", type=float, default=cfg.eta2, help="photon 2 ellipticity angle")
+    parser.add_argument("--n-spins", type=int, default=cfg.N_spins)
     args = parser.parse_args()
+    if not np.isfinite([args.eta1, args.eta2]).all():
+        parser.error("ellipticity angles must be finite")
+    if args.n_spins < 2:
+        parser.error("--n-spins must be >= 2")
+    cfg.eta1, cfg.eta2, cfg.N_spins = args.eta1, args.eta2, args.n_spins
+    _VALIDATION_N = min(cfg.N_spins, 4)
     if args.subgrid and args.stage != "sweep":
         parser.error("--subgrid is only valid with the sweep stage")
     if args.subgrid and args.campaign:

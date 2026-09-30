@@ -4,6 +4,24 @@ from __future__ import annotations
 import numpy as np
 
 
+def assert_unitality(image_identity, atol=1e-10):
+    """Kerr implementation control for all rotation and ellipticity angles."""
+    residual = float(np.linalg.norm(image_identity - np.eye(4)))
+    if residual > atol:
+        raise AssertionError(f"unitality residual {residual} exceeds {atol}")
+    return residual
+
+
+def assert_rank_two_support(rho_photons, atol=1e-10):
+    """Phi+/Psi- support control; call only for rotation-only Phi+ input."""
+    phi_minus = np.array([1, 0, 0, -1]) / np.sqrt(2)
+    psi_plus = np.array([0, 1, 1, 0]) / np.sqrt(2)
+    # Check full forbidden rows/columns, including coherences.
+    for vector in (phi_minus, psi_plus):
+        if np.linalg.norm(rho_photons @ vector) > atol:
+            raise AssertionError("rotation-only Bell support violated")
+
+
 def density_matrix_diagnostics(rho: np.ndarray) -> dict:
     rho = np.asarray(rho, dtype=complex)
     herm_err = float(np.linalg.norm(rho - rho.conj().T))

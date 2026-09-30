@@ -1,98 +1,200 @@
-# LossPhotonicEntanglement - corrected pre-results model
+﻿# EP-MOKS file guide
 
-This revision changes the numerical model so that it matches the proposed observable: **polarization entanglement of two sequential probe photons**.  The previous code used two truncated bosonic modes and the Fock-state superposition `( |0,0> + |1,1> )/sqrt(2)`, which is not the polarization Bell pair described in the manuscript.
+Code for simulating two sequential polarization-qubit probes coupled to a spin chain.
 
-## Physical model
+| File | Purpose |
+| --- | --- |
+| `config.py` | Defines model settings, sweep grids, unit conversions, and output naming. |
+| `pipeline.py` | Runs preflight validation, computes individual protocol points, and saves parameter sweeps. |
+| `operators.py` | Provides basic matrices, tensor products, and operator embeddings. |
+| `hamiltonians.py` | Builds spin Hamiltonians, probe magnetization operators, interaction generators, and commutators. |
+| `states.py` | Constructs initial photon states and thermal spin states. |
+| `new_evolution.py` | Implements unitary evolution and Kronecker-sum application routines. |
+| `new_protocol.py` | Assembles probe profiles and the sequential photon-spin interaction protocol. |
+| `observables.py` | Computes expectation values and partial traces. |
+| `measures.py` | Computes entanglement, entropy, coherence, purity, mutual information, and fidelity diagnostics. |
+| `validation.py` | Checks density-matrix physicality and operator unitarity. |
+| `correlations.py` | Computes spin magnetization correlators and the magnetization-distance function using spectral methods. |
+| `sector_correlations.py` | Computes magnetization-distance curves using conserved magnetization sectors. |
+| `thermometry.py` | Builds cached temperature channels, QFI, apparatus CFI, and product/unrestricted input searches. |
+| `thermometry_benchmark.py` | Runs validated local thermometry campaigns and independently refines Bell/product delays. |
+| `thermometry_report.py` | Summarizes completed thermometry campaigns and plots QFI against common delay. |
+| `thermometry_symmetry_check.py` | Checks the branch-complementation collapse of the QFI-optimal input and its origin in the h_z=0 sector-mirror symmetry, including the h_z!=0 breaking prediction. |
+| `parity_preflight.py` | Evaluates the spin characteristic function and checks its relationships to photon-state diagnostics. |
+| `channel_diagnostics.py` | Reconstructs the photon channel from matrix-unit responses and checks Choi positivity, trace preservation, Hermiticity, and unitality. |
+| `check_convergence.py` | Compares selected protocol points across chain sizes and probe profiles, and provides point timing. |
+| `finite_size_dm.py` | Runs sector-based finite-size campaigns, validates the sector calculation, and exports curves, extrema, and fits; also analyzes saved revivals and plots embedded reference arrays. |
+| `compute_reduced_states.py` | Extracts and saves photon and spin reduced states from a saved joint density matrix. |
+| `analyze_results.py` | Converts sweep summaries into tabulated diagnostics and summary reports. |
+| `plot_results.py` | Generates sweep figures, extracts extrema, compares with perturbative predictions, and exports correlators. |
+| `tests/test_physics.py` | Tests analytic controls, evolution implementations, channel reconstruction, correlators, and reporting behavior. |
+| `requirements.txt` | Lists Python dependencies. |
 
-Hilbert-space ordering is
+## Run instructions
 
-`photon_1 polarization qubit x photon_2 polarization qubit x spin_1 x ... x spin_N`.
+Run these commands in PowerShell from the repository root, using your Python environment.
 
-The spin bath is a finite open XXZ chain
+Install dependencies:
 
-`H_s = J sum_i [Sx_i Sx_{i+1} + Sy_i Sy_{i+1} + Delta Sz_i Sz_{i+1}] - h_z sum_i Sz_i`,
+```powershell
+python -m pip install -r requirements.txt
+```
 
-with `S = sigma/2`, `hbar = k_B = 1`, and `J` the exchange-energy scale in this repo's sign convention: `J>0` is antiferromagnetic, `J<0` is ferromagnetic.
+Set model settings, sweep grids, and the output root in `config.py`. The pipeline reads these settings; the CLI also accepts `--eta1`, `--eta2`, and `--n-spins` overrides. Use `python pipeline.py --help` to inspect supported options.
 
-The primary EP-MOKS proxy is an impulsive, magnetization-conditioned polarization rotation
+### Validate and run a sweep
 
-`U_k = exp[-i theta_k sigma_y^(photon k) tensor M_z^(probe)]`.
-
-`M_z^(probe)` is a weighted local magnetization.  A nonuniform spatial profile is the default because a local MOKE spot samples local magnetization and, unlike the total `S_z`, it is not conserved by the XXZ exchange dynamics.  `probe_model="collective"` is retained as an exact control: because total `S_z` commutes with the XXZ Hamiltonian, the reduced two-photon state must be exactly independent of the inter-photon delay.
-
-This is a **coherent effective Kerr-rotation model**, not a microscopic electronic theory of MOKE.  Absorption, polarization-dependent reflectivity, detector loss, and conditional/postselected channels are not included yet.
-
-The production defaults use `theta1 = theta2 = 0.4` to produce a resolvable toy-model signal and scan dimensionless delays from 0 to 12 (about 232 fs for KCuF3), covering multiple finite-chain recurrence times. `weak_coupling_theta = 0.05` is reserved for perturbative validation. Optional campaign settings include `theta_nonperturbative = 1.0` and `theta_asym = (0.4, 0.2)`. These angles are not fitted material parameters.
-
-## Material anchoring
-
-The first material-anchored production pass targets **KCuF3**, a quasi-1D S=1/2 antiferromagnetic Heisenberg chain with intrachain exchange `J ≈ 34 meV` and near-isotropic exchange (~0.2% x-y anisotropy), Néel temperature `T_N = 39 K`.
-
-Source: Lake, Tennant, Nagler et al., *"Longitudinal Magnetic Dynamics and Dimensional Crossover in the Quasi-One-Dimensional, Spin-1/2, Heisenberg Antiferromagnet KCuF3,"* arXiv:cond-mat/0503128.
-
-`config.py` sets `J_meV = 34.0`, uses the antiferromagnetic sign convention (`J = +1.0` internally), and takes `Delta = 1.0` (the isotropic Heisenberg limit) as an **explicit modeling approximation**. Only the dominant intrachain XXZ term is represented — reported interchain exchange, the residual (~0.2%) anisotropy, and `T_N` are **not** encoded as active simulation parameters, since doing so would require extending the Hamiltonian to include interchain degrees of freedom, which this repository does not currently implement.
-
-This calculation should therefore be read as a reduced one-dimensional proxy for dominant intrachain dynamics, not as a quantitatively complete microscopic model of KCuF3. `config.delay_fs()` converts a dimensionless sweep delay to femtoseconds via `hbar/J_meV`, for reporting only — the sweep itself remains dimensionless internally.
-
-## Why the old Ising-Dicke/Tavis-Cummings framing was removed
-
-The old `(a+a^dagger) sum sigma_z` coupling displaces a bosonic field and changes occupation number; it is not a polarization rotation.  The Tavis-Cummings interaction describes excitation exchange and is a cavity-QED benchmark, not a direct MOKE Hamiltonian.  An optional `exchange_benchmark` remains in `hamiltonians.py`/`new_protocol.py`, but manuscript claims must not identify it as MOKE.
-
-## Diagnostics
-
-The repository now distinguishes:
-
-- `concurrence`: two-qubit entanglement measure;
-- `mutual_information`: total correlation, not entanglement;
-- photon-pair von Neumann entropy and purity: mixedness;
-- `l1_coherence` and relative entropy of coherence: basis-dependent coherence measures;
-- Bell-state fidelity.
-
-The previous sum of squared off-diagonal elements was removed because it should not be presented as a standard resource-theoretic coherence monotone.
-
-## Required pre-run sequence
-
-```bash
+```powershell
 python pipeline.py validate
-pytest -q
-```
+if ($LASTEXITCODE -ne 0) { throw "Validation failed" }
 
-Only after those pass should the full sweep be run:
+python -m pytest -q
+if ($LASTEXITCODE -ne 0) { throw "Tests failed" }
 
-```bash
 python pipeline.py sweep
+if ($LASTEXITCODE -ne 0) { throw "Sweep failed" }
 ```
 
-The production grid is 8 temperatures x 121 delays = 968 points (about 14.1 hours at 52.5 seconds per point). Do not duplicate it for perturbative validation. Instead run the coarse 2-temperature x 10-delay x 3-angle campaign:
+Every sweep also runs mandatory preflight validation. Sweep outputs include reduced photon states and summary files.
 
-```bash
+To run a named campaign using the configured grid:
+
+```powershell
+python pipeline.py sweep --campaign my_campaign
+```
+
+For the built-in coarse weak-coupling campaign:
+
+```powershell
 python pipeline.py sweep --subgrid
 ```
 
-Before interpreting a sweep, repeat selected points at larger `N_spins`, narrower grid spacing, and alternative probe profiles. A finite ten-spin chain does not exhibit a thermodynamic phase transition and cannot support claims of critical scaling.
+### Analyze and plot saved output
 
-Post-processing commands are:
+Pass the intended summary explicitly when multiple campaigns exist. Replace the example path below with the saved summary JSON path:
 
-```bash
-python analyze_results.py
-python plot_results.py
-python channel_diagnostics.py --temperature-k 300 --delta-t 2.0
+```powershell
+$summaryPath = "data/summary_example.json"
+python analyze_results.py "$summaryPath" --output-dir "reports/my_campaign"
+if ($LASTEXITCODE -ne 0) { throw "Analysis failed" }
+
+python plot_results.py "$summaryPath"
+if ($LASTEXITCODE -ne 0) { throw "Plotting failed" }
 ```
 
-The channel diagnostic reconstructs all 16 matrix-unit responses before reporting Choi positivity, trace preservation, and unitality; a single Bell-state sweep is not sufficient for a channel-level claim. Both ordered magnetization correlators are exported by `plot_results.py` to `reports/`.
+The scripts print their output locations. The plotter organizes figures by campaign relative to the summary location.
 
-## Exact control identity
+### Additional diagnostics
 
-For an equal-weight collective probe,
+Run channel reconstruction or characteristic-function checks using their defaults:
 
-`[H_XXZ, M_z^collective] = 0`.
+```powershell
+python channel_diagnostics.py
+python parity_preflight.py
+```
 
-The thermal state is a function of `H_XXZ`, and hence commutes with the conserved magnetization.  The two impulsive Kerr interactions are then conditioned on a static magnetization sector, so tracing out the spins gives a convex mixture of correlated photon-pair unitaries.  Consequently the reduced photon state is random-unitary and exactly independent of the free spin delay.  The test suite enforces this identity.
+Inspect their `--help` output to select protocol points and other supported options.
 
-## Equal-coupling zero-delay invariance
+Run finite-size magnetization-distance calculations, then analyze saved revival positions:
 
-For `theta1 = theta2 = theta` and `delta_t = 0`, the reduced photon state returns to the input Bell state for *any* probe profile, not only the conserved collective one. This follows because the Kerr rotation `exp(-i theta sigma_y)` is a real orthogonal matrix, so `(U(mu) ⊗ U(mu))|Phi+> = |Phi+>` on every eigenspace of the probe operator. `pipeline.py`'s `_validate_equal_coupling_zero_delay_invariance` and `test_physics.py`'s `test_equal_coupling_zero_delay_invariance_any_probe` enforce this identity across probe models and temperatures.
+```powershell
+python finite_size_dm.py
+if ($LASTEXITCODE -ne 0) { throw "Finite-size calculation failed" }
 
-## Validation gate
+python finite_size_dm.py --revivals
+python finite_size_dm.py --plot-reference
+```
 
-A sweep is hard-gated by the mandatory preflight routine. `python pipeline.py sweep` calls `stage_validate()` before entering the parameter loop and aborts on any failed check. Analytic controls use four spins and test the Bell baseline, zero-coupling identity, collective/local commutators including the local formula's sign and prefactor, thermal-state physicality, `U1`/`Udelay`/`U2` unitarity, nontrivial multi-sector collective-probe delay independence, equal-coupling zero-delay invariance, and representative configured smoke points. A final point uses the configured production size (`N=10`). The independent `test_physics.py` suite also checks analytic limits and the production fast path against a brute-force dense implementation.
+`--revivals` expects the original N=8,10,12,14 and 6/500 K reference campaign keys; use `--curves PATH` to select its saved NPZ file. `--plot-reference` plots the original embedded arrays and does not automatically visualize a new campaign.
+
+Inspect convergence and saved-state reduction commands:
+
+```powershell
+python check_convergence.py --help
+python compute_reduced_states.py --help
+```
+
+Convergence comparisons use existing sweep output. Saved-state reduction requires a joint photon-spin density matrix, rather than the already reduced photon states saved by the sweep.
+
+## Elliptical Kerr interaction
+
+Both propagation paths implement `exp[-i (theta_k sigma_y + eta_k sigma_z) tensor M]`.
+The defaults `eta1 = eta2 = 0` retain the rotation-only model. Nonzero eta is
+lossless retardance, and is rejected for the exchange benchmark. Dense component
+`G1`/`G2` include both angles for Kerr (`U = exp(-i G)`); the standalone generator
+helper defaults to the legacy unit-angle generator.
+
+```powershell
+.\.venv\Scripts\python.exe ellipticity_preflight.py
+.\.venv\Scripts\python.exe pipeline.py sweep --campaign ellipticity_smoke --n-spins 4 --n-temps 3 --n-delays 7 --eta1 0.25 --eta2 0.25
+```
+
+Preflight checks unitality for all angles, the manuscript's four elliptical
+reference controls, and the original rotation-only controls at explicitly zero
+ellipticity. Every zero-delay Phi+ Kerr point is checked against spectral
+averaging of the exact Bell overlap, including unequal angles and zero coupling.
+
+Summary rows save both eta angles, all four Bell populations, and theory
+applicability. `p` and `Im_C` are supplied only for rotation-only Phi+ Kerr input;
+they are null for elliptical output. `bell_infidelity = 1-F` remains available
+for every model. The full reduced density matrices retain all coherences.
+Nonzero-eta, nonzero-delay output is labeled exploratory: no elliptical
+second-order delay law is assumed, and rotation-only perturbative plots are
+skipped. The weak subgrid requires eta1=eta2=0.
+
+Filenames contain both eta angles. Each sweep also saves a manifest containing
+validation residuals, configuration source, actual model parameters, probe
+weights, grids, units, git revision, and hashes of the Python source files.
+Old summaries without eta fields are interpreted as rotation-only data.
+
+Manuscript qualifications and research notes are kept locally in `manuscript/notes.md` (excluded from Git).
+
+## Remaining manuscript computations
+
+Run the full N=10 six-field follow-up locally using the existing production
+kernel caches. This saves the midpoint comparison, full-simplex escape search,
+and held-out rational fits under `reports/remaining_computations`:
+
+```powershell
+$env:OPENBLAS_NUM_THREADS = '1'
+$env:OMP_NUM_THREADS = '1'
+.\.venv\Scripts\python.exe remaining_computations.py
+if ($LASTEXITCODE -ne 0) { throw "Follow-up computation failed" }
+.\.venv\Scripts\python.exe refine_remaining.py
+if ($LASTEXITCODE -ne 0) { throw "Refinement audit failed" }
+.\.venv\Scripts\python.exe summarize_remaining.py
+if ($LASTEXITCODE -ne 0) { throw "Report failed" }
+.\.venv\Scripts\python.exe -m pytest tests -q -p no:cacheprovider
+```
+
+The field files are checkpoints. Refinement checks endpoint-adjacent symmetric
+maxima and independently audits each field's largest escape with new optimizer
+seeds. The report distinguishes detection tolerance, negligible information,
+and monotonicity failures. `symmetric_qfi.py` provides the exact two-block
+cubic-over-quadratic QFI and quartic stationary-point candidates for nonsingular
+parity-invariant kernels; singular cases use the spectral calculation.
+
+## Model conventions
+
+The probes are two polarization qubits. The spin bath is a finite XXZ spin-1/2
+chain with S=sigma/2 and J>0 for antiferromagnetic exchange. KCuF3 motivates
+the J approximately 34 meV scale; Delta=1 is an isotropic modeling approximation
+that omits interchain exchange and residual anisotropy. A nonuniform Gaussian
+probe is the default; collective magnetization provides the exact
+delay-independent control. `config.py` defines the active production settings.
+
+## Local files and Git
+
+Keep manuscript text, drafts, and research notes in `manuscript/`. The consolidated
+notes are in `manuscript/notes.md` on the local working copy. Generated data,
+reports, figures, logs, environments, and local tool settings are ignored.
+The README is the repository's file and workflow guide.
+
+Run the thermometry benchmark and then summarize its saved campaigns with:
+
+```powershell
+python thermometry_benchmark.py
+python thermometry_report.py
+```
+
+Use each command's `--help` for grid, output, and validation options.

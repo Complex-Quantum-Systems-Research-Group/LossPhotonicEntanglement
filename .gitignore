@@ -50,6 +50,38 @@ artifacts/
 reports/
 runs/
 .git - Copy/
+img/
+figures/
+source_snapshot/
+*.npy
+*.npz
+*.csv
+*.jsonl
+
+# Private manuscript sources, drafts, and compiled documents
+[Mm][Aa][Nn][Uu][Ss][Cc][Rr][Ii][Pp][Tt]*/
+[Mm][Aa][Nn][Uu][Ss][Cc][Rr][Ii][Pp][Tt]*.*
+*.tex
+*.bib
+*.pdf
+*.doc
+*.docx
+*.odt
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.synctex.gz
+*.toc
+
+# Local development state
+.claude/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
 # -----------------------------------------------------------------------------
 # Logs and temp files

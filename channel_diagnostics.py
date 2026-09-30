@@ -32,7 +32,7 @@ CHOI_CONVENTION = (
 def apply_photon_channel(
     photon_operator, *, n_spins, J, delta, temperature, delta_t,
     theta1, theta2, probe_model="local_gaussian", probe_sigma_sites=1.0,
-    h_z=0.0, periodic=False,
+    h_z=0.0, periodic=False, eta1=0.0, eta2=0.0,
 ):
     """Apply the primary Kerr protocol linearly to an arbitrary 4x4 operator."""
     photon_operator = np.asarray(photon_operator, dtype=complex)
@@ -43,7 +43,7 @@ def apply_photon_channel(
         delta_t=delta_t, theta1=theta1, theta2=theta2,
         probe_model=probe_model, probe_sigma_sites=probe_sigma_sites,
         h_z=h_z, periodic=periodic, interaction_type="kerr",
-        photon_operator=photon_operator,
+        photon_operator=photon_operator, eta1=eta1, eta2=eta2,
     )
     return partial_trace_spins(evolved, n_spins)
 
@@ -121,7 +121,7 @@ def main() -> None:
         n_spins=cfg.N_spins, J=cfg.J, delta=cfg.delta, temperature=temperature,
         delta_t=args.delta_t, theta1=cfg.theta1, theta2=cfg.theta2,
         probe_model=cfg.probe_model, probe_sigma_sites=cfg.probe_sigma_sites,
-        h_z=cfg.h_z, periodic=cfg.periodic,
+        h_z=cfg.h_z, periodic=cfg.periodic, eta1=cfg.eta1, eta2=cfg.eta2,
     )
     diagnostics = validate_choi_reconstruction(reconstruct_choi(**protocol))
     diagnostics["parameters"] = {
@@ -130,6 +130,8 @@ def main() -> None:
         "n_spins": cfg.N_spins,
         "theta1": cfg.theta1,
         "theta2": cfg.theta2,
+        "eta1": cfg.eta1,
+        "eta2": cfg.eta2,
     }
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

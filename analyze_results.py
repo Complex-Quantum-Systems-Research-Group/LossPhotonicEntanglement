@@ -19,6 +19,7 @@ import config as cfg
 
 
 POINT_COLUMNS = (
+    "eta1", "eta2", "theory_status", "p", "Im_C", "bell_infidelity",
     "T",
     "T_kelvin",
     "delta_t",
@@ -93,6 +94,9 @@ def analyze(rows: list[dict], source: Path) -> tuple[list[dict], dict]:
     temperatures = sorted({row["T_kelvin"] for row in rows})
     delays = sorted({row["delta_t_fs"] for row in rows})
     headline = {
+        "eta1": rows[0].get("eta1", 0.0),
+        "eta2": rows[0].get("eta2", 0.0),
+        "theory_status": sorted({r.get("theory_status", "legacy_rotation_only") for r in rows}),
         "source": str(source),
         "n_points": len(rows),
         "n_temperatures": len(temperatures),
@@ -118,6 +122,9 @@ def analyze(rows: list[dict], source: Path) -> tuple[list[dict], dict]:
 def _report_weak_coupling_gate(rows: list[dict]) -> None:
     """Report applicability of the perturbative residual gate without failing."""
     first = rows[0]
+    if any(r.get("eta1", 0.0) != 0.0 or r.get("eta2", 0.0) != 0.0 for r in rows):
+        print("SKIP weak-coupling gate: elliptical delay response is exploratory")
+        return
     theta1 = float(first.get("theta1", cfg.theta1))
     theta2 = float(first.get("theta2", cfg.theta2))
     if not (

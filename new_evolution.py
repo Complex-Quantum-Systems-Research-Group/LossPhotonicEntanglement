@@ -32,7 +32,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.linalg import expm
 
-from operators import I2, SY, kron_all
+from operators import I2, SY, SZ, kron_all
 
 
 def unitary_from_generator(generator, angle):
@@ -69,36 +69,33 @@ def unitary_from_spin_hamiltonian_embedded(Hs, t, block_dim=4):
     return np.kron(A, B)
 
 
-def kerr_rotation_terms(theta, photon, magnetization):
-    """Kron-sum representation of exp(-i theta * sigma_y^(photon) (x) M):
-    two terms (Pi_+, exp(-i theta M)) and (Pi_-, exp(+i theta M)), using the
-    P^2=I4 projector shortcut (see module docstring). Only two exponentials
-    of `magnetization` (spin-only dimension) are ever computed.
+def kerr_rotation_terms(theta, photon, magnetization, eta=0.0):
+    """Exact terms for exp[-i (theta Y_k + eta Z_k) tensor M].
+
+    Normalize the combined involutory photon generator. Signed angles are
+    retained in its projectors; the spin exponential uses hypot(theta, eta).
     """
     if photon not in (0, 1):
         raise ValueError("photon must be 0 or 1")
-    p1 = SY if photon == 0 else I2
-    p2 = SY if photon == 1 else I2
-    P = kron_all([p1, p2])  # 4x4, P^2 = I4 exactly
-
-    I4 = np.eye(4, dtype=complex)
-    Pi_pos = 0.5 * (I4 + P)
-    Pi_neg = 0.5 * (I4 - P)
-
+    theta, eta = float(theta), float(eta)
+    if not np.isfinite([theta, eta]).all():
+        raise ValueError("Kerr angles must be finite")
     M = np.asarray(magnetization, dtype=complex)
-    U_pos = expm(-1j * float(theta) * M)
-    U_neg = expm(+1j * float(theta) * M)
+    magnitude = np.hypot(theta, eta)
+    I4 = np.eye(4, dtype=complex)
+    if magnitude == 0.0:
+        return [(I4, np.eye(M.shape[0], dtype=complex))]
+    axis = (theta * SY + eta * SZ) / magnitude
+    P = kron_all([axis if photon == 0 else I2, axis if photon == 1 else I2])
+    return [
+        (0.5 * (I4 + P), expm(-1j * magnitude * M)),
+        (0.5 * (I4 - P), expm(+1j * magnitude * M)),
+    ]
 
-    return [(Pi_pos, U_pos), (Pi_neg, U_neg)]
 
-
-def kerr_rotation_unitary(theta, photon, magnetization):
-    """Return exp(-i theta * sigma_y^(photon) (x) magnetization) as a dense
-    matrix (for validation/inspection; use kerr_rotation_terms +
-    apply_kron_sum for the cheap path that avoids ever forming this dense
-    matrix).
-    """
-    terms = kerr_rotation_terms(theta, photon, magnetization)
+def kerr_rotation_unitary(theta, photon, magnetization, eta=0.0):
+    """Dense unitary for inspection, using the exact elliptical decomposition."""
+    terms = kerr_rotation_terms(theta, photon, magnetization, eta=eta)
     return sum(np.kron(A, B) for A, B in terms)
 
 

@@ -135,6 +135,8 @@ def _summary_metadata(rows, summary_path):
         "h_z": value("h_z", r"(?:^|_)hz=([^_]+)", cfg.h_z),
         "theta1": value("theta1", r"(?:^|_)theta1=([^_]+)", cfg.theta1),
         "theta2": value("theta2", r"(?:^|_)theta2=([^_]+)", cfg.theta2),
+        "eta1": value("eta1", r"(?:^|_)eta1=([^_]+)", 0.0),
+        "eta2": value("eta2", r"(?:^|_)eta2=([^_]+)", 0.0),
         "probe_model": first.get("probe_model") or (
             re.search(r"(?:^|_)probe=(.+?)_sigma=", name).group(1)
             if re.search(r"(?:^|_)probe=(.+?)_sigma=", name) else cfg.probe_model
@@ -173,11 +175,11 @@ def plot_mixture_weight_heatmap(rows, figs_dir):
     fig, ax = plt.subplots(figsize=(8.5, 5.5))
     mesh = ax.pcolormesh(delays, temperatures, mixture_weight, shading="auto", cmap="magma")
     colorbar = fig.colorbar(mesh, ax=ax)
-    colorbar.set_label(r"mixture weight $p=1-F$")
+    colorbar.set_label(r"Bell infidelity $1-F$")
     ax.set_xlabel("delay (fs)")
     ax.set_ylabel("temperature (K)")
     ax.set_title(
-        rf"Exact Bell-mixture weight $p(\Delta t,T)$ "
+        rf"Exact Bell infidelity $1-F(\Delta t,T)$ "
         f"({cfg.material}, N={rows[0].get('n_spins', cfg.N_spins)})"
     )
     fig.tight_layout()
@@ -199,7 +201,7 @@ def plot_mixture_weight_cuts(rows, figs_dir):
             label=f"T={temperature:.0f} K",
         )
     ax.set_xlabel("delay (fs)")
-    ax.set_ylabel(r"mixture weight $p=1-F$")
+    ax.set_ylabel(r"Bell infidelity $1-F$")
     ax.set_title("Representative temperature cuts")
     ax.legend()
     ax.grid(alpha=0.3)
@@ -232,7 +234,7 @@ def characterize_extrema(rows, figs_dir):
     """Report physically meaningful extrema and recurrence spacings of p."""
     groups = _group_by_temperature(rows)
     records = []
-    lines = ["Extrema of p=1-F (interior points; 5% prominence threshold):"]
+    lines = ["Extrema of Bell infidelity 1-F (interior points; 5% prominence threshold):"]
     for temperature, group in groups.items():
         delays = np.asarray([row["delta_t_fs"] for row in group])
         p = 1.0 - np.asarray([row["bell_fidelity"] for row in group])
@@ -383,6 +385,9 @@ def fit_weak_coupling_exponent(metadata, groups):
 
 def plot_second_order_departure_heatmap(rows, figs_dir, metadata):
     """Plot relative departure of p from the equal-coupling second-order law."""
+    if metadata.get("eta1", 0.0) != 0.0 or metadata.get("eta2", 0.0) != 0.0:
+        print("SKIP weak-coupling check / second-order comparison: elliptical delay response is exploratory")
+        return
     theta1, theta2 = metadata["theta1"], metadata["theta2"]
     if not np.isclose(theta1, theta2):
         print("SKIP second-order departure heatmap: theta1 != theta2")
@@ -430,6 +435,9 @@ def plot_second_order_departure_heatmap(rows, figs_dir, metadata):
 def run_weak_coupling_check(rows, figs_dir, summary_path):
     groups = _group_by_temperature(rows, sort_key="delta_t")
     metadata = _summary_metadata(rows, summary_path)
+    if metadata.get("eta1", 0.0) != 0.0 or metadata.get("eta2", 0.0) != 0.0:
+        print("SKIP weak-coupling check / second-order comparison: elliptical delay response is exploratory")
+        return
     theta1, theta2 = metadata["theta1"], metadata["theta2"]
     is_weak_campaign = (
         np.isclose(theta1, cfg.weak_coupling_theta)
